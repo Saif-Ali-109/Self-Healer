@@ -1,0 +1,21 @@
+# Agent tooling (not pushed)
+.opencode/
+
+# Cloned dependency repo
+fleet/
+
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.local
+*.local
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Build output
+dist/
+build/
