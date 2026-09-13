@@ -282,4 +282,5 @@ With multiple developers:
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
+- **Parallel rule (constitution 1.1.0)**: subagents may run `[P]` tasks in parallel only when they touch different files; never let two agents edit the same file simultaneously — serialize or merge same-file work.
 - Fleet is a dev-time dependency: only Self-Healer source + `specs/` + `.specify/` are committed; `fleet/`, `.opencode/`, `.env` stay gitignored

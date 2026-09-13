@@ -1,8 +1,8 @@
 <!--
 Sync Impact Report
-- Version change: (new constitution) → 1.0.0
-- Modified principles: none (initial ratification)
-- Added sections: Core Principles (I-V), Operating Constraints, Delivery & Escalation, Development Workflow, Governance
+- Version change: 1.0.0 → 1.1.0 (MINOR: new parallel-execution guidance added to Development Workflow)
+- Modified principles: none (existing principles unchanged)
+- Added sections: none — added Development Workflow rule: parallel subagent task execution with no same-file concurrent edits
 - Removed sections: none
 - Follow-up TODOs: none
 -->
@@ -58,6 +58,7 @@ The agent MUST NOT open pull requests and MUST NOT merge anything. Fixes are pus
 - MVP is "done" when the loop webhook → worktree → classifier (flaky vs. real_bug, infra stubbed) → retry runner → lint/format-only fix → escalation comment works end-to-end, with tests covering each piece.
 - Additional fixable patterns are added one at a time, each with its own validation step and tests.
 - Repository hygiene: commit only project spec files and source. Do not commit Flammable tooling directories such as `.opencode`, local config, or secrets. Tooling state under `.specify` is shared deliberately.
+- **Parallel task execution**: Build tasks MAY be executed by subagents in parallel, but ONLY where tasks do not conflict. No two subagents MUST ever edit the same file at the same time; a file is owned by one subagent at a moment. Tasks touching the same file MUST be serialized or merged by the orchestrator, and conflicts MUST be resolved before committing.
 
 ## Governance
 
@@ -66,4 +67,4 @@ The agent MUST NOT open pull requests and MUST NOT merge anything. Fixes are pus
 - Every constitution change MUST be recorded in the SOR log (what changed, when, why).
 - All pull requests and reviews MUST verify compliance with this constitution.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-13
+**Version**: 1.1.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-13
