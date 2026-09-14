@@ -44,10 +44,10 @@ description: "Task list template for feature implementation"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T006 Create migration `migrations/017_ci_runs.sql` (table + `uq_ci_runs_extrn`, `idx_ci_runs_commit`, `idx_ci_runs_branch`) per data-model.md
-- [ ] T007 [P] Create migration `migrations/018_classifications.sql` (table + `idx_classifications_run`, `idx_classifications_category`) per data-model.md
-- [ ] T008 [P] Create migration `migrations/019_fix_attempts.sql` (table + unique `uq_fix_attempts_run` enforcing the one-attempt cap) per data-model.md
-- [ ] T009 [P] Create migration `migrations/020_escalations.sql` (table + unique `uq_escalations_run`) per data-model.md
+- [X] T006 Create migration `migrations/017_ci_runs.sql` (table + `uq_ci_runs_extrn`, `idx_ci_runs_commit`, `idx_ci_runs_branch`) per data-model.md
+- [X] T007 [P] Create migration `migrations/018_classifications.sql` (table + `idx_classifications_run`, `idx_classifications_category`) per data-model.md
+- [X] T008 [P] Create migration `migrations/019_fix_attempts.sql` (table + unique `uq_fix_attempts_run` enforcing the one-attempt cap) per data-model.md
+- [X] T009 [P] Create migration `migrations/020_escalations.sql` (table + unique `uq_escalations_run`) per data-model.md
 - [X] T010 Extend `src/db/migrate.ts` to register and apply migrations 017–020 (order + dependency-safe)
 - [X] T011 Implement env/secret loader `src/config.ts` — validate required vars at startup and fail loudly if missing; never log secret values
 - [X] T012 Define canonical normalized CI event type + response-code contract in `src/types.ts` per contracts/webhook-ci.md
