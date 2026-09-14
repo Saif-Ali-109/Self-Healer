@@ -55,7 +55,10 @@ function listMigrationFiles(): string[] {
 	const seen = new Set<string>();
 	const files: string[] = [];
 	for (const dir of getMigrationsDirs()) {
-		for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+		for (const f of fs
+			.readdirSync(dir)
+			.filter((f) => f.endsWith(".sql"))
+			.sort()) {
 			if (!seen.has(f)) {
 				seen.add(f);
 				files.push(path.join(dir, f));

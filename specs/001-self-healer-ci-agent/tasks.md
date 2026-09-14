@@ -51,9 +51,9 @@ description: "Task list template for feature implementation"
 - [X] T010 Extend `src/db/migrate.ts` to register and apply migrations 017–020 (order + dependency-safe)
 - [X] T011 Implement env/secret loader `src/config.ts` — validate required vars at startup and fail loudly if missing; never log secret values
 - [X] T012 Define canonical normalized CI event type + response-code contract in `src/types.ts` per contracts/webhook-ci.md
-- [ ] T013 Implement shared CI comment client `src/pipeline/comments.ts` — posts to a CI run via the `gh` api wrapper, redacts secret patterns, formats the 3 comment types from contracts/ci-comment.md
-- [ ] T014 Implement SOR chaining helper `src/sor/ciEvents.ts` — chains `classifications`/`fix_attempts`/`escalations` inserts and `ci_runs` status transitions through Fleet's SOR ingest
-- [ ] T015 Implement budget tracker `src/utils/budget.ts` — hard 3-call LLM cap + 10-minute pipeline timer; on exhaustion signal escalation with partial evidence
+- [X] T013 Implement shared CI comment client `src/pipeline/comments.ts` — posts to a CI run via the `gh` api wrapper, redacts secret patterns, formats the 3 comment types from contracts/ci-comment.md
+- [X] T014 Implement SOR chaining helper `src/sor/ciEvents.ts` — chains `classifications`/`fix_attempts`/`escalations` inserts and `ci_runs` status transitions through Fleet's SOR ingest
+- [X] T015 Implement budget tracker `src/utils/budget.ts` — hard 3-call LLM cap + 10-minute pipeline timer; on exhaustion signal escalation with partial evidence
 
 **Checkpoint**: Foundation ready — user story implementation can now begin
 
@@ -69,18 +69,18 @@ description: "Task list template for feature implementation"
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T016 [P] [US1] Contract test for webhook endpoint auth + response codes in `tests/integration/webhook_test.ts` using `tests/fixtures/github-workflow-job-fail.json`
-- [ ] T017 [P] [US1] Unit test classifier signals + confidence scoring in `tests/unit/classifier_test.ts` (flaky/infra/real_bug per contracts/classification.md)
+- [X] T016 [P] [US1] Contract test for webhook endpoint auth + response codes in `tests/integration/webhook_test.ts` using `tests/fixtures/github-workflow-job-fail.json`
+- [X] T017 [P] [US1] Unit test classifier signals + confidence scoring in `tests/unit/classifier_test.ts` (flaky/infra/real_bug per contracts/classification.md)
 
 ### Implementation for User Story 1
 
-- [ ] T018 [P] [US1] Implement normalization `src/webhook/normalize.ts` — validate payload, build canonical event, compute dedupe key (`external_run_id`+`repo`+`job_id`)
-- [ ] T019 [US1] Implement GitHub Actions adapter `src/webhook/adapters/github.ts` mapping `workflow_job` payload → canonical event (contracts/webhook-ci.md)
-- [ ] T020 [US1] Implement webhook endpoint `src/webhook/server.ts` mounted on Fleet's dashboard server — `POST /api/webhook/ci`, HMAC-verify `X-Webhook-Secret`, return `202/400/401/409`
-- [ ] T021 Implement FIFO queue + dedupe `src/pipeline/queue.ts` (single worker; rejects duplicate events)
-- [ ] T022 [P] [US1] Implement classifier signals `src/pipeline/classifier/signals.ts` — flaky + infra rule lists (contracts/classification.md)
-- [ ] T023 [US1] Implement classifier `src/pipeline/classifier/index.ts` — rule-first category + confidence (≥ 0.7 threshold), evidence capture, persist to `classifications` and chain to SOR (T014)
-- [ ] T024 [US1] Implement orchestrator intake `src/pipeline/orchestrator.ts` — deploy → queue → open worktree at failing commit (reuse `fleet/src/git/worktree.ts`) → classify → route flaky/real_bug/infra
+- [X] T018 [P] [US1] Implement normalization `src/webhook/normalize.ts` — validate payload, build canonical event, compute dedupe key (`external_run_id`+`repo`+`job_id`)
+- [X] T019 [US1] Implement GitHub Actions adapter `src/webhook/adapters/github.ts` mapping `workflow_job` payload → canonical event (contracts/webhook-ci.md)
+- [X] T020 [US1] Implement webhook endpoint `src/webhook/server.ts` — `POST /api/webhook/ci`, HMAC-verify `X-Webhook-Secret`, return `202/400/401/409`. Implemented as a standalone `node:http` server on `CI_WEBHOOK_PORT` (contract path would collide with Fleet's `/webhook` dashboard route); `handleCiWebhook` stays mountable via Fleet's `ApiHandlers` interface
+- [X] T021 Implement FIFO queue + dedupe `src/pipeline/queue.ts` (single worker; rejects duplicate events)
+- [X] T022 [P] [US1] Implement classifier signals `src/pipeline/classifier/signals.ts` — flaky + infra rule lists (contracts/classification.md)
+- [X] T023 [US1] Implement classifier `src/pipeline/classifier/index.ts` — rule-first category + confidence (≥ 0.7 threshold), evidence capture, persist to `classifications` and chain to SOR (T014)
+- [X] T024 [US1] Implement orchestrator intake `src/pipeline/orchestrator.ts` — deploy → queue → open worktree at failing commit (reuse `fleet/src/git/worktree.ts`) → classify → route flaky/real_bug/infra
 
 **Checkpoint**: User Story 1 fully functional and testable independently
 
@@ -96,12 +96,12 @@ description: "Task list template for feature implementation"
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T025 [P] [US2] Unit test retry budget in `tests/unit/retry_test.ts` (max 3 reruns, uses stubbed rerun API)
+- [X] T025 [P] [US2] Unit test retry budget in `tests/unit/retry_test.ts` (max 3 reruns, uses stubbed rerun API)
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Implement retry runner `src/pipeline/retry/runner.ts` — job rerun via `gh` api wrapper, max 3, update `ci_runs.status` (`retrying` → `resolved`), chain transitions to SOR
-- [ ] T027 [US2] Wire flaky routing in `src/pipeline/orchestrator.ts` — on rerun pass post flaky-resolved comment (comments.ts type 3); after 3 failures route to escalation with reason `flaky_retries_exhausted`
+- [X] T026 [US2] Implement retry runner `src/pipeline/retry/runner.ts` — job rerun via `gh` api wrapper, max 3, update `ci_runs.status` (`retrying` → `resolved`), chain transitions to SOR
+- [X] T027 [US2] Wire flaky routing in `src/pipeline/orchestrator.ts` — on rerun pass post flaky-resolved comment (comments.ts type 3); after 3 failures route to escalation with reason `flaky_retries_exhausted`
 
 **Checkpoint**: User Stories 1 AND 2 both work independently
 
@@ -117,15 +117,15 @@ description: "Task list template for feature implementation"
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T028 [P] [US3] Unit test allowlist + one-attempt cap in `tests/unit/fixscope_test.ts` (enforces contracts/fix-attempt.md rules)
-- [ ] T029 [P] [US3] Integration test lint-fix loop in `tests/integration/lintfix_test.ts` (quickstart scenario B)
+- [X] T028 [P] [US3] Unit test allowlist + one-attempt cap in `tests/unit/fixscope_test.ts` (enforces contracts/fix-attempt.md rules)
+- [X] T029 [P] [US3] Integration test lint-fix loop in `tests/integration/lintfix_test.ts` (quickstart scenario B)
 
 ### Implementation for User Story 3
 
-- [ ] T030 [US3] Implement allowlist registry `src/pipeline/fixscope/allowlist.ts` — data-driven pattern entries; MVP ships `lint/format` only (contracts/fix-attempt.md)
-- [ ] T031 [US3] Implement lintfixer `src/pipeline/fixscope/lintfixer.ts` — run formatter in the worktree, verify (lint exits 0, diff non-empty), commit + push `ci-fix/<run-id>` via git worktree
-- [ ] T032 [US3] Implement fix-attempt persistence `src/pipeline/fixscope/record.ts` — write to `fix_attempts` (unique per run) and chain to SOR; reusable branch-name util
-- [ ] T033 [US3] Wire real_bug path in orchestrator: guardrail → fix → verify → post fix-delivered comment (comments.ts type 1); verification failure → escalate with reason `fix_failed` (no second attempt — DB unique enforces)
+- [X] T030 [US3] Implement allowlist registry `src/pipeline/fixscope/allowlist.ts` — data-driven pattern entries; MVP ships `lint/format` only (contracts/fix-attempt.md)
+- [X] T031 [US3] Implement lintfixer `src/pipeline/fixscope/lintfixer.ts` — run formatter in the worktree, verify (lint exits 0, diff non-empty), commit + push `ci-fix/<run-id>` via git worktree
+- [X] T032 [US3] Implement fix-attempt persistence `src/pipeline/fixscope/record.ts` — write to `fix_attempts` (unique per run) and chain to SOR; reusable branch-name util
+- [X] T033 [US3] Wire real_bug path in orchestrator: guardrail → fix → verify → post fix-delivered comment (comments.ts type 1); verification failure → escalate with reason `fix_failed` (no second attempt — DB unique enforces)
 
 **Checkpoint**: User Story 3 works independently — auto-heal loop complete
 
@@ -141,13 +141,13 @@ description: "Task list template for feature implementation"
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T034 [P] [US4] Unit test escalation reason mapping in `tests/unit/escalation_test.ts` (contracts/fix-attempt.md table)
-- [ ] T035 [P] [US4] Integration test escalation path in `tests/integration/escalation_test.ts` (quickstart scenarios C, D)
+- [X] T034 [P] [US4] Unit test escalation reason mapping in `tests/unit/escalation_test.ts` (contracts/fix-attempt.md table)
+- [X] T035 [P] [US4] Integration test escalation path in `tests/integration/escalation_test.ts` (quickstart scenarios C, D)
 
 ### Implementation for User Story 4
 
-- [ ] T036 [US4] Implement escalation writer `src/pipeline/escalation/writer.ts` — build summary + suggested_next_step from evidence, persist to `escalations` + SOR, post comment (comments.ts type 2)
-- [ ] T037 [US4] Wire all escalation triggers in `src/pipeline/orchestrator.ts`: low_confidence, infra, critical_branch, multi_file, no_pattern_match, budget_exhausted, checkout_failed → escalate
+- [X] T036 [US4] Implement escalation writer `src/pipeline/escalation/writer.ts` — build summary + suggested_next_step from evidence, persist to `escalations` + SOR, post comment (comments.ts type 2)
+- [X] T037 [US4] Wire all escalation triggers in `src/pipeline/orchestrator.ts`: low_confidence, infra, critical_branch, multi_file, no_pattern_match, budget_exhausted, checkout_failed → escalate
 
 **Checkpoint**: User Stories 1–4 all work independently
 
@@ -163,12 +163,12 @@ description: "Task list template for feature implementation"
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T038 [P] [US5] Integration test SOR chaining for CI tables in `tests/integration/sor_ci_test.ts` (quickstart scenario F)
+- [X] T038 [P] [US5] Integration test SOR chaining for CI tables in `tests/integration/sor_ci_test.ts` (quickstart scenario F)
 
 ### Implementation for User Story 5
 
-- [ ] T039 [US5] Implement audit reconstruction helper `src/audit/reconstruct.ts` — rebuild what the agent saw/decided for a run from `ci_runs` + `classifications` + `fix_attempts` + `escalations`
-- [ ] T040 [P] [US5] Wire `sor:verify` npm script + document audit commands in README
+- [X] T039 [US5] Implement audit reconstruction helper `src/audit/reconstruct.ts` — rebuild what the agent saw/decided for a run from `ci_runs` + `classifications` + `fix_attempts` + `escalations`
+- [X] T040 [P] [US5] Wire `sor:verify` npm script + document audit commands in README
 
 **Checkpoint**: All user stories independently functional
 
@@ -178,10 +178,10 @@ description: "Task list template for feature implementation"
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T041 [P] Run full quickstart.md validation (scenarios A–G) and fix any gaps found
-- [ ] T042 [P] Security hardening: timing-safe HMAC compare, secret-redaction tests for comments/logs, confirm zero secrets in fixtures
-- [ ] T043 [P] Documentation: README usage + finalize `.env.example`
-- [ ] T044 Commit hygiene check: confirm `fleet/`, `.opencode/`, `.env` stay untracked; only `src/`, `specs/`, `.specify/` committed and pushed
+- [X] T041 [P] Run full quickstart.md validation (scenarios A–G) and fix any gaps found — DB-backed scenarios validated (A-partial, B-partial, C, D, F): webhook contract, classification persistence, one-attempt cap, escalation, SOR verify + tamper detection; live-GitHub steps (worktree push, rerun/comment) deferred to a token-equipped environment (see README "Validation status")
+- [X] T042 [P] Security hardening: timing-safe HMAC compare, secret-redaction tests for comments/logs, confirm zero secrets in fixtures
+- [X] T043 [P] Documentation: README usage + finalize `.env.example`
+- [X] T044 Commit hygiene check: confirm `fleet/`, `.opencode/`, `.env` stay untracked; only `src/`, `specs/`, `.specify/` committed and pushed
 
 ---
 

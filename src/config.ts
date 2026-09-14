@@ -21,10 +21,12 @@ export interface AppConfig {
  * Fails loudly with a clear message listing missing required vars.
  * Secrets are never logged or included in error messages beyond their key name.
  */
-export function loadConfig(
-	env: NodeJS.ProcessEnv = process.env,
-): AppConfig {
-	const missing = REQUIRED_ENV.filter((k) => !env[k] || env[k]!.trim() === "");
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+	const required = (key: string): string => env[key] ?? "";
+	const missing = REQUIRED_ENV.filter((k) => {
+		const v = env[k];
+		return v === undefined || v.trim() === "";
+	});
 	if (missing.length > 0) {
 		throw new Error(
 			`Missing required environment variables: ${missing.join(", ")}. See .env.example.`,
@@ -32,9 +34,9 @@ export function loadConfig(
 	}
 
 	return {
-		ghToken: env.GH_TOKEN!,
-		webhookSecret: env.CI_WEBHOOK_SECRET!,
-		databaseUrl: env.DATABASE_URL!,
+		ghToken: required("GH_TOKEN"),
+		webhookSecret: required("CI_WEBHOOK_SECRET"),
+		databaseUrl: required("DATABASE_URL"),
 		webhookPort: Number(env.CI_WEBHOOK_PORT) || 3457,
 		sorSigningKey: env.SOR_SIGNING_KEY || undefined,
 		sorKeyId: env.SOR_KEY_ID || "v1",
