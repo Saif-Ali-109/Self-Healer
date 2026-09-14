@@ -30,11 +30,11 @@ description: "Task list template for feature implementation"
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create repo scaffolding per plan.md: `src/webhook/`, `src/pipeline/{classifier,fixscope,retry,escalation}/`, `src/db/`, `src/sor/`, `src/utils/`, `tests/{unit,integration,fixtures}/`, `tests/fixtures/`
-- [ ] T002 Initialize TypeScript project: `package.json` (`"type": "module"`, engines `node >=22`), `tsconfig.json` (strict ESM, `noEmit`), and path alias wiring the local `fleet/` clone for imports
-- [ ] T003 [P] Configure lint/format tooling: `biome.json` + `lint`/`format` npm scripts mirroring Fleet's config
-- [ ] T004 [P] Create `.env.example` documenting `GH_TOKEN`, `CI_WEBHOOK_SECRET`, `DATABASE_URL`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`; extend `.gitignore` for `.env` (never committed)
-- [ ] T005 Add npm scripts to `package.json`: `start`, `typecheck`, `test`, `migrate:up`, `sor:verify`
+- [X] T001 Create repo scaffolding per plan.md: `src/webhook/`, `src/pipeline/{classifier,fixscope,retry,escalation}/`, `src/db/`, `src/sor/`, `src/utils/`, `tests/{unit,integration,fixtures}/`, `tests/fixtures/`
+- [X] T002 Initialize TypeScript project: `package.json` (`"type": "module"`, engines `node >=22`), `tsconfig.json` (strict ESM, `noEmit`), and path alias wiring the local `fleet/` clone for imports
+- [X] T003 [P] Configure lint/format tooling: `biome.json` + `lint`/`format` npm scripts mirroring Fleet's config
+- [X] T004 [P] Create `.env.example` documenting `GH_TOKEN`, `CI_WEBHOOK_SECRET`, `DATABASE_URL`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`; extend `.gitignore` for `.env` (never committed)
+- [X] T005 Add npm scripts to `package.json`: `start`, `typecheck`, `test`, `migrate:up`, `sor:verify`
 
 ---
 
@@ -48,9 +48,9 @@ description: "Task list template for feature implementation"
 - [ ] T007 [P] Create migration `migrations/018_classifications.sql` (table + `idx_classifications_run`, `idx_classifications_category`) per data-model.md
 - [ ] T008 [P] Create migration `migrations/019_fix_attempts.sql` (table + unique `uq_fix_attempts_run` enforcing the one-attempt cap) per data-model.md
 - [ ] T009 [P] Create migration `migrations/020_escalations.sql` (table + unique `uq_escalations_run`) per data-model.md
-- [ ] T010 Extend `src/db/migrate.ts` to register and apply migrations 017–020 (order + dependency-safe)
-- [ ] T011 Implement env/secret loader `src/config.ts` — validate required vars at startup and fail loudly if missing; never log secret values
-- [ ] T012 Define canonical normalized CI event type + response-code contract in `src/types.ts` per contracts/webhook-ci.md
+- [X] T010 Extend `src/db/migrate.ts` to register and apply migrations 017–020 (order + dependency-safe)
+- [X] T011 Implement env/secret loader `src/config.ts` — validate required vars at startup and fail loudly if missing; never log secret values
+- [X] T012 Define canonical normalized CI event type + response-code contract in `src/types.ts` per contracts/webhook-ci.md
 - [ ] T013 Implement shared CI comment client `src/pipeline/comments.ts` — posts to a CI run via the `gh` api wrapper, redacts secret patterns, formats the 3 comment types from contracts/ci-comment.md
 - [ ] T014 Implement SOR chaining helper `src/sor/ciEvents.ts` — chains `classifications`/`fix_attempts`/`escalations` inserts and `ci_runs` status transitions through Fleet's SOR ingest
 - [ ] T015 Implement budget tracker `src/utils/budget.ts` — hard 3-call LLM cap + 10-minute pipeline timer; on exhaustion signal escalation with partial evidence

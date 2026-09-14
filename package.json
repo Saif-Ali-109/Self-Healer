@@ -1,0 +1,31 @@
+{
+	"name": "self-healer-ci-agent",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "CI failure agent: classify flaky/real_bug/infra, retry flaky, auto-fix allowlisted bugs on a branch, escalate with comments, tamper-evident audit.",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"start": "tsx --env-file-if-exists=.env src/index.ts",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "biome check",
+		"format": "biome format --write",
+		"migrate:up": "tsx --env-file-if-exists=.env src/db/migrate.ts up",
+		"migrate:down": "tsx --env-file-if-exists=.env src/db/migrate.ts down"
+	},
+	"dependencies": {
+		"pg": "^8.23.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.10",
+		"@types/node": "^22.10.0",
+		"@types/pg": "^8.21.0",
+		"tsx": "^4.19.2",
+		"typescript": "^5.7.2",
+		"vitest": "^3.0.0"
+	}
+}

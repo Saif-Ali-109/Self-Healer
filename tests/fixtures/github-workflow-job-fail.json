@@ -1,0 +1,32 @@
+{
+	"action": "completed",
+	"workflow_job": {
+		"id": 987654321,
+		"run_id": 1234567890,
+		"run_attempt": 1,
+		"name": "test (ubuntu-latest)",
+		"head_branch": "feature/fix-lint",
+		"head_sha": "0123456789abcdef0123456789abcdef01234567",
+		"status": "completed",
+		"conclusion": "failure",
+		"check_run_url": "https://api.github.com/repos/acme/widget/actions/jobs/987654321",
+		"labels": ["ubuntu-latest"]
+	},
+	"workflow_run": {
+		"id": 1234567890,
+		"name": "CI",
+		"head_branch": "feature/fix-lint",
+		"head_sha": "0123456789abcdef0123456789abcdef01234567",
+		"event": "push",
+		"status": "completed",
+		"conclusion": "failure",
+		"run_number": 42
+	},
+	"repository": {
+		"full_name": "acme/widget",
+		"name": "widget",
+		"owner": {
+			"login": "acme"
+		}
+	}
+}
