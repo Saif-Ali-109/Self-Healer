@@ -92,7 +92,9 @@ async function pollLoop(pool: import("pg").Pool): Promise<void> {
 				delivered_at: new Date().toISOString(),
 			};
 
-			const result2 = await processCiFailure(event);
+			const result2 = await processCiFailure(event, {
+				runId: row.run_id,
+			});
 			console.log(
 				`[worker] run ${row.run_id} → ${result2.path}${result2.reason ? ` (${result2.reason})` : ""}`,
 			);

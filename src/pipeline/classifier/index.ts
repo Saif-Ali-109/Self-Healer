@@ -7,19 +7,18 @@ import { classifyFromSignals, detectSignals } from "./signals.ts";
 /**
  * Fetch job logs via gh CLI (best-effort).
  */
-async function fetchJobLogs(logUrl: string): Promise<string> {
+async function fetchJobLogs(repo: string, logUrl: string): Promise<string> {
 	try {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
 		const exec = promisify(execFile);
-		// logUrl is the check_run_url; gh api can fetch logs via the check-run ID
+		// logUrl is the job URL (…/actions/jobs/<id>); gh api can fetch the log text.
 		const match = logUrl.match(/\/jobs\/(\d+)$/);
 		if (!match) return "";
 		const jobId = match[1];
-		// Try gh api to get the log text
 		const result = await exec(
 			"gh",
-			["api", `repos/{owner}/{repo}/actions/jobs/${jobId}/logs`, "--jq", "."],
+			["api", `repos/${repo}/actions/jobs/${jobId}/logs`, "--jq", "."],
 			{ maxBuffer: 32 * 1024 * 1024 },
 		);
 		return result.stdout;
@@ -39,9 +38,10 @@ async function fetchJobLogs(logUrl: string): Promise<string> {
 export async function classify(
 	pool: Pool,
 	runId: string,
+	repo: string,
 	logUrl: string,
 ): Promise<ClassificationResult> {
-	const logText = await fetchJobLogs(logUrl);
+	const logText = await fetchJobLogs(repo, logUrl);
 	const signals = detectSignals(logText);
 	const { category, confidence, evidence } = classifyFromSignals(signals);
 

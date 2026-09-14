@@ -48,23 +48,31 @@ export interface PipelineResult {
  */
 export async function processCiFailure(
 	event: CiEvent,
+	opts: { runId?: string } = {},
 ): Promise<PipelineResult> {
 	const pool = getPool();
 	const queue = new CiQueue(pool);
 	const budget = new PipelineBudget();
 
-	// Enqueue (dedupe)
-	const enqueueResult = await queue.enqueue(event);
-	if (!enqueueResult.ok) {
+	// Intake (webhook path): enqueue + dedupe. The worker path passes an
+	// existing runId (row already in ci_runs) and must NOT re-enqueue.
+	let runId = opts.runId;
+	if (!runId) {
+		const enqueueResult = await queue.enqueue(event);
+		if (!enqueueResult.ok) {
+			return { runId: "", path: "error", reason: "enqueue_failed" };
+		}
+		if (enqueueResult.duplicate) {
+			console.log(
+				`[orchestrator] duplicate event ignored: ${event.external_run_id}:${event.repo}:${event.job_id}`,
+			);
+			return { runId: "", path: "error", reason: "duplicate" };
+		}
+		runId = enqueueResult.run_id!;
+	}
+	if (!runId) {
 		return { runId: "", path: "error", reason: "enqueue_failed" };
 	}
-	if (enqueueResult.duplicate) {
-		console.log(
-			`[orchestrator] duplicate event ignored: ${event.external_run_id}:${event.repo}:${event.job_id}`,
-		);
-		return { runId: "", path: "error", reason: "duplicate" };
-	}
-	const runId = enqueueResult.run_id!;
 
 	try {
 		// ── Stage 1: Classify ────────────────────────────────────────
@@ -84,7 +92,7 @@ export async function processCiFailure(
 
 		let classification: ClassificationResult;
 		try {
-			classification = await classify(pool, runId, event.log_url);
+			classification = await classify(pool, runId, event.repo, event.log_url);
 		} catch (err) {
 			return escalate(
 				pool,
