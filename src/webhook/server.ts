@@ -59,6 +59,16 @@ export async function handleCiWebhook(
 	if ("error" in validated)
 		return { status: 400, body: { error: validated.error } };
 
+	// Guard: never re-process events from the agent's own ci-fix/* branches.
+	// Opening a fix PR triggers CI on the fix branch; those failures are the
+	// agent's own scaffolding (e.g. demo flaky/unknown jobs), not the user's.
+	if (validated.branch.startsWith("ci-fix/")) {
+		console.log(
+			`[webhook] ignoring event for agent branch ${validated.branch}`,
+		);
+		return { status: 202, body: { ok: true, skipped: "agent branch" } };
+	}
+
 	// Enqueue (dedupe via unique index)
 	const pool = getPool();
 	const queue = new CiQueue(pool);

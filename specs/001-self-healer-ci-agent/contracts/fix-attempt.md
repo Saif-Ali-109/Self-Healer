@@ -4,7 +4,7 @@
 
 ## Purpose
 
-The contract governing the auto-fix path: allowlist matching, the single attempt, verification, and branch/comment delivery. Nothing in this path opens a PR or merges (constitution principle V).
+The contract governing the auto-fix path: allowlist matching, the single attempt, verification, and branch → fix-PR → comment delivery. Nothing in this path merges (constitution principle V); the fix PR is opened so a human can review and approve it.
 
 ## Allowlist (pattern registry)
 
@@ -40,7 +40,7 @@ Pattern entries are data-driven (a registry, not an if/else chain) so new patter
 2. **Fix scope guardrail** — fix is attempted only when the failure matches an allowlisted pattern. No match → escalate with `no_pattern_match`.
 3. **Preconditions to attempt**: classification `real_bug` AND confidence ≥ 0.7 AND failure touches < 5 files AND branch is not critical (`main`, `release/*`, `v*`) AND fix budget available AND no prior failed attempt.
 4. **Verification** — run only the affected check/test plus a subset of the suite; `verification_result: passed` is required before delivery. Fail → escalate with `fix_failed`, no second attempt.
-5. **Delivery** — commit to `ci-fix/<run-id>` branch (recreated/updated per run), push, then post a CI-run comment containing: root cause, branch name, diff summary, test results. Never open a PR, never merge.
+5. **Delivery** — commit to `ci-fix/<run-id>` branch (recreated/updated per run), push, open a fix-only PR from `ci-fix/<run-id>` to the failing branch for human review, then post a CI-run comment containing: root cause, branch name, diff summary, test results, and the fix PR link. Never merge.
 6. **Audit** — the attempt, diff, and verification result are persisted to `fix_attempts` and chained through SOR.
 
 ## Escalation reasons mapping

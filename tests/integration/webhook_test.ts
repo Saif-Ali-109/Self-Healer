@@ -71,6 +71,21 @@ describe.skipIf(!hasDb)("webhook contract (POST /api/webhook/ci)", () => {
 		expect(row.rows[0]?.branch).toBe("feature/fix-lint");
 	});
 
+	it("skips events from the agent's own ci-fix/* branches → 202 skipped", async () => {
+		const agentBranch = fixture.replaceAll(
+			'"feature/fix-lint"',
+			'"ci-fix/01234567"',
+		);
+		const res = await handleCiWebhook(signedHeaders(agentBranch), agentBranch);
+		expect(res.status).toBe(202);
+		expect(res.body).toEqual({ ok: true, skipped: "agent branch" });
+		// No ci_runs row is created for the agent's own branch
+		const row = await pool.query(
+			"SELECT count(*)::int AS n FROM ci_runs WHERE external_run_id = '1234567890' AND branch = 'ci-fix/01234567'",
+		);
+		expect(row.rows[0]?.n).toBe(0);
+	});
+
 	it("rejects a duplicate event → 409", async () => {
 		await handleCiWebhook(signedHeaders(), fixture);
 		const res = await handleCiWebhook(signedHeaders(), fixture);

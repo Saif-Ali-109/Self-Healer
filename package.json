@@ -17,6 +17,7 @@
 		"migrate:up": "tsx --env-file-if-exists=.env src/db/migrate.ts up",
 		"migrate:down": "tsx --env-file-if-exists=.env src/db/migrate.ts down",
 		"sor:verify": "tsx --env-file-if-exists=.env fleet/src/sor/verifyCli.ts",
+		"sor:amend": "tsx --env-file-if-exists=.env scripts/record-constitution-amendment.ts",
 		"sor:repair": "tsx --env-file-if-exists=.env fleet/src/sor/repairCli.ts",
 		"audit:run": "tsx --env-file-if-exists=.env src/audit/reconstruct.ts"
 	},

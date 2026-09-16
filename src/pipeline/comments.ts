@@ -99,29 +99,22 @@ async function postComment(
 	}
 }
 
+export interface FixCommentOptions {
+	rootCause: string;
+	pattern: string;
+	branch: string;
+	diffSummary: string;
+	verification: string;
+	/** Fix-only PR URL, when one was opened for review (constitution v1.2.0). */
+	fixPrUrl?: string;
+}
+
 /**
- * Post a "fix delivered" comment (contracts/ci-comment.md type 1).
- * Format:
- *   ## 🤖 Self-Healer: fix proposed (auto-fix)
- *   **Root cause**: ...
- *   **Pattern matched**: `lint/format`
- *   **Branch**: `ci-fix/<run-id>`
- *   **Diff summary**: N files changed
- *   **Verification**: passed
- *   > Review and merge at your discretion. The agent never merges.
+ * Build the "fix delivered" comment body (contracts/ci-comment.md type 1).
+ * Pure string builder — testable without a repo.
  */
-export async function postFixComment(
-	repo: string,
-	externalRunId: string,
-	opts: {
-		rootCause: string;
-		pattern: string;
-		branch: string;
-		diffSummary: string;
-		verification: string;
-	},
-): Promise<string | null> {
-	const body = [
+export function buildFixCommentBody(opts: FixCommentOptions): string {
+	return [
 		"## 🤖 Self-Healer: fix proposed (auto-fix)",
 		"",
 		`**Root cause**: ${opts.rootCause}`,
@@ -131,10 +124,23 @@ export async function postFixComment(
 		`**Branch**: \`${opts.branch}\``,
 		`**Diff summary**: ${opts.diffSummary}`,
 		`**Verification**: ${opts.verification}`,
+		...(opts.fixPrUrl
+			? ["", `**Pull request**: ${opts.fixPrUrl} — review & merge when ready.`]
+			: []),
 		"",
 		"> Review and merge at your discretion. The agent never merges.",
 	].join("\n");
-	return postComment(repo, externalRunId, body);
+}
+
+/**
+ * Post a "fix delivered" comment (contracts/ci-comment.md type 1).
+ */
+export async function postFixComment(
+	repo: string,
+	externalRunId: string,
+	opts: FixCommentOptions,
+): Promise<string | null> {
+	return postComment(repo, externalRunId, buildFixCommentBody(opts));
 }
 
 /**

@@ -27,6 +27,7 @@ import { PipelineBudget } from "../utils/budget.ts";
 import { classify, fetchJobLogs } from "./classifier/index.ts";
 import { writeEscalation } from "./escalation/writer.ts";
 import { matchPattern } from "./fixscope/allowlist.ts";
+import { openFixPr } from "./fixscope/fixpr.ts";
 import { applyLintFix } from "./fixscope/lintfixer.ts";
 import { fixBranchName, recordFixAttempt } from "./fixscope/record.ts";
 import { CiQueue } from "./queue.ts";
@@ -360,6 +361,19 @@ async function attemptFix(
 		});
 
 		if (fixResult.success) {
+			// Human-approved delivery (constitution v1.2.0): surface the verified
+			// fix as a reviewable PR. The agent never merges.
+			const fixPrUrl = await openFixPr(pool, {
+				runId,
+				repo: event.repo,
+				externalRunId: event.external_run_id,
+				headBranch: branch,
+				baseBranch: event.branch,
+				pattern: patternId,
+				diffSummary: `${fixResult.filesChanged} files changed`,
+				verification: `${verifyCommand}: passed`,
+			});
+
 			// Post fix comment
 			const { postFixComment } = await import("./comments.ts");
 			const newCommentUrl = await postFixComment(
@@ -371,12 +385,13 @@ async function attemptFix(
 					branch,
 					diffSummary: `${fixResult.filesChanged} files changed`,
 					verification: `${verifyCommand}: passed`,
+					fixPrUrl: fixPrUrl ?? undefined,
 				},
 			);
-			if (newCommentUrl) {
+			if (newCommentUrl || fixPrUrl) {
 				await pool.query(
-					"UPDATE fix_attempts SET comment_url = $1 WHERE run_id = $2",
-					[newCommentUrl, runId],
+					"UPDATE fix_attempts SET comment_url = COALESCE($1, comment_url), fix_pr_url = COALESCE($2, fix_pr_url) WHERE run_id = $3",
+					[newCommentUrl, fixPrUrl, runId],
 				);
 			}
 			await queue.updateStatus(runId, "resolved");

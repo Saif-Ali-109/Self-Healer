@@ -4,7 +4,7 @@
 
 ## Purpose
 
-The outbound contract: how the agent communicates with humans. All findings are posted as **comments on the CI run** via the platform API (`gh api` wrapper pattern from Fleet's `github/gh.ts`). Comments are the only delivery channel in MVP (constitution principles I & V).
+The outbound contract: how the agent communicates with humans. Findings are posted as **comments on the CI run** via the platform API (`gh api` wrapper pattern from Fleet's `github/gh.ts`). A verified auto-fix is additionally surfaced as a **fix-only pull request** for human review (constitution principle V — comments + fix PR are the only delivery channels; the agent never merges).
 
 ## Authorization
 
@@ -25,9 +25,12 @@ The outbound contract: how the agent communicates with humans. All findings are 
 **Branch**: `ci-fix/<run-id>`
 **Diff summary**: [N files changed, +M/−K lines]
 **Verification**: [affected check/test names], passed
+**Pull request**: <fix-PR-url> — review & merge when ready.
 
 > Review and merge at your discretion. The agent never merges.
 ```
+
+When no fix PR could be opened, the `**Pull request**` line is omitted and the branch link stays the review path.
 
 ### 2. Escalation (all trigger reasons)
 
@@ -56,7 +59,7 @@ No action needed.
 
 ## Delivery rules
 
-- One comment per pipeline outcome (fix / escalation / flaky-resolved); fixed runs never also escalate.
+- One comment per pipeline outcome (fix / escalation / flaky-resolved); fixed runs never also escalate. A verified fix additionally opens one fix-only PR (idempotent per `ci-fix/<run-id>` head; never merges).
 - Comment content is assembled from persisted records (`fix_attempts` / `escalations`), so the comment is always reproducible from the audit trail.
 - Secret material (tokens, keys) MUST never appear in comment bodies — the writer strips anything matching secret patterns and redacts (`***`) if it appears in logs/diffs.
 - Comment posting failures are themselves logged + SOR-chained, satisfying "no silent decisions".

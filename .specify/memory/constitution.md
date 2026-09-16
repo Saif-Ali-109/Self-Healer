@@ -1,8 +1,8 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0 (MINOR: new parallel-execution guidance added to Development Workflow)
-- Modified principles: none (existing principles unchanged)
-- Added sections: none — added Development Workflow rule: parallel subagent task execution with no same-file concurrent edits
+- Version change: 1.1.0 → 1.2.0 (MINOR: principle V expanded — a verified auto-fix MAY now be surfaced as a fix-only pull request for human review; the agent still never merges)
+- Modified principles: V (Human-Approved Delivery — expanded)
+- Added sections: none
 - Removed sections: none
 - Follow-up TODOs: none
 -->
@@ -24,7 +24,7 @@ Auto-fix MUST only be attempted for the fixable-pattern allowlist: (1) outdated 
 Every decision (classification, retry, fix attempt, escalation) MUST be appended to Fleet's SOR hash-chain with the evidence used (logs read, pattern matched, confidence, model, run IDs). The agent's behavior MUST remain fully auditable end-to-end, mirroring the SOR discipline of the Fleet base.
 
 ### V. Human-Approved Delivery
-The agent MUST NOT open pull requests and MUST NOT merge anything. Fixes are pushed to a reusable `ci-fix`-style branch per repository, followed by a comment on the CI run with root cause, branch name, diff summary, and test results. Escalations are posted as CI run comments with root-cause summary and suggested next step. A human always reviews before any change reaches the critical path.
+The agent MUST NOT open pull requests for unverified content and MUST NEVER merge anything. For a VERIFIED auto-fix, the agent MAY open a single fix-only pull request (from the reusable `ci-fix/<run-id>` branch to the failing branch) so a human can review and approve it through the platform's normal PR flow, and MAY reference that PR in the CI run comment alongside the root cause, branch name, diff summary, and test results. Escalations are posted as CI run comments with root-cause summary and suggested next step. A human always reviews before any change reaches the critical path; the agent never pushes to protected branches.
 
 ## Operating Constraints
 
@@ -50,6 +50,7 @@ The agent MUST NOT open pull requests and MUST NOT merge anything. Fixes are pus
   5. LLM or time budget exhausted
   6. Failure does not match the fixable-pattern allowlist
 - **Fix verification**: Run only the affected test(s) plus a subset of the full suite. Fix failing → escalate, no second attempt.
+- **Fix delivery**: A successful fix is pushed to the `ci-fix/<run-id>` branch and surfaced as a fix-only PR (ci-fix → failing branch) for human review, with the PR link in the CI run comment. The agent never merges.
 
 ## Development Workflow
 
@@ -67,4 +68,4 @@ The agent MUST NOT open pull requests and MUST NOT merge anything. Fixes are pus
 - Every constitution change MUST be recorded in the SOR log (what changed, when, why).
 - All pull requests and reviews MUST verify compliance with this constitution.
 
-**Version**: 1.1.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-13
+**Version**: 1.2.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-16
