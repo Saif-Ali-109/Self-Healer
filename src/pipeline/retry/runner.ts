@@ -62,6 +62,11 @@ export async function retryFlaky(
 ): Promise<RetryResult> {
 	const queue = new CiQueue(pool);
 
+	// Single-job reruns re-create the job with a NEW id on the new attempt, and
+	// GitHub only allows re-running the CURRENT attempt's job. Track the job id
+	// and refresh it from the jobs list after each completed rerun.
+	let jobIdToRerun = opts.jobId;
+
 	for (let attempt = 1; attempt <= MAX_RERUNS; attempt++) {
 		console.log(
 			`[retry] rerun ${attempt}/${MAX_RERUNS} for run ${opts.externalRunId} job ${opts.jobName}`,
@@ -81,7 +86,7 @@ export async function retryFlaky(
 			// Trigger a rerun of ONLY this job
 			await gh([
 				"api",
-				`repos/${opts.repo}/actions/jobs/${opts.jobId}/rerun`,
+				`repos/${opts.repo}/actions/jobs/${jobIdToRerun}/rerun`,
 				"--method",
 				"POST",
 			]);
@@ -104,11 +109,12 @@ export async function retryFlaky(
 			continue;
 		}
 
-		const rerunConclusion = await jobConclusionForRun(
+		const newestJob = await newestJobForRun(
 			opts.repo,
 			opts.externalRunId,
 			opts.jobName,
 		);
+		const rerunConclusion = newestJob?.conclusion ?? null;
 
 		if (rerunConclusion === "success") {
 			// Resolved!
@@ -134,6 +140,16 @@ export async function retryFlaky(
 		console.log(
 			`[retry] rerun ${attempt} still failed (conclusion: ${rerunConclusion ?? "unknown"})`,
 		);
+
+		// Refresh the job id for the NEXT rerun: it now points to a new instance
+		// under the current attempt (the previous id is stale and would 403).
+		if (newestJob?.id) {
+			jobIdToRerun = newestJob.id;
+		} else {
+			console.warn(
+				`[retry] could not resolve newest job id for ${opts.jobName} — next rerun may fail`,
+			);
+		}
 	}
 
 	// Exhausted all reruns
@@ -206,25 +222,27 @@ async function pollRunForRerun(
 
 /**
  * After a rerun completes, find the newest job instance in the run matching
- * `jobName` and return its conclusion ('success' | 'failure' | null).
- * Single-job reruns re-create the job (new ID, same name), so the newest
- * instance by started_at is the result of our rerun.
+ * `jobName` and return its id + conclusion. Single-job reruns re-create the
+ * job under the new attempt (new ID, same name), so the newest instance by
+ * started_at is the result of our rerun — and its ID is the only one GitHub
+ * will accept for the next rerun.
  */
-async function jobConclusionForRun(
+async function newestJobForRun(
 	repo: string,
 	runId: string,
 	jobName: string,
-): Promise<string | null> {
+): Promise<{ id: string; conclusion: string | null } | null> {
 	try {
 		const raw = await gh([
 			"api",
 			`repos/${repo}/actions/runs/${runId}/jobs`,
 			"--paginate",
 			"--jq",
-			`[.jobs[] | select(.name == "${jobName}")] | sort_by(.started_at) | last | .conclusion`,
+			`[.jobs[] | select(.name == "${jobName}")] | sort_by(.started_at) | last | {id, conclusion}`,
 		]);
-		const c = raw.trim();
-		return c && c !== "null" ? c : null;
+		const j = JSON.parse(raw) as { id?: number | string; conclusion?: string };
+		if (!j?.id) return null;
+		return { id: String(j.id), conclusion: j.conclusion ?? null };
 	} catch {
 		return null;
 	}
