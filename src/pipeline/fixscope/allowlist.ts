@@ -2,12 +2,14 @@ export interface AllowlistEntry {
 	id: string; // e.g. "lint/format"
 	description: string;
 	detect: (logText: string) => boolean; // true if this pattern matches the failure
-	verifyCommand: string; // shell command to verify the fix works
+	verifyCommand: string; // the command executed in the worktree after the fix; exit 0 verifies it (also used in comments/PR text)
+	rootCause?: string; // human-readable root-cause line used in the fix comment
 }
 
 /**
- * MVP fixable-pattern allowlist.
- * Only "lint/format" is active; others return false (post-MVP).
+ * Fixable-pattern allowlist.
+ * Active: "lint/format", "import/type". Stubs (detect() === false, post-MVP):
+ * "snapshot", "timeout".
  */
 const ENTRIES: AllowlistEntry[] = [
 	{
@@ -18,7 +20,8 @@ const ENTRIES: AllowlistEntry[] = [
 			/lint\s+error|formatting?\s+error|prettier|biome\s+check|eslint|expected\s+.*but\s+received/i.test(
 				log,
 			),
-		verifyCommand: "npx @biomejs/biome check --write .",
+		verifyCommand: "npx @biomejs/biome check .",
+		rootCause: "Lint/format issues detected in the failing job.",
 	},
 	{
 		id: "snapshot",
@@ -29,9 +32,12 @@ const ENTRIES: AllowlistEntry[] = [
 	{
 		id: "import/type",
 		description:
-			"Missing/incorrect import or type error with obvious single-line fix (post-MVP)",
-		detect: () => false,
-		verifyCommand: "",
+			"Missing import — a symbol referenced but not imported (`ReferenceError: X is not defined`) with a deterministic single-line fix",
+		detect: (log: string) =>
+			/ReferenceError:\s+[A-Za-z_$][A-Za-z0-9_$]*\s+is not defined/.test(log),
+		verifyCommand: "node src/main.mjs",
+		rootCause:
+			"A symbol referenced in the failing job is not imported (`ReferenceError: X is not defined`).",
 	},
 	{
 		id: "timeout",

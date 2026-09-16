@@ -26,8 +26,9 @@ import {
 import { PipelineBudget } from "../utils/budget.ts";
 import { classify, fetchJobLogs } from "./classifier/index.ts";
 import { writeEscalation } from "./escalation/writer.ts";
-import { matchPattern } from "./fixscope/allowlist.ts";
+import { type AllowlistEntry, matchPattern } from "./fixscope/allowlist.ts";
 import { openFixPr } from "./fixscope/fixpr.ts";
+import { applyImportFix } from "./fixscope/importfixer.ts";
 import { applyLintFix } from "./fixscope/lintfixer.ts";
 import { fixBranchName, recordFixAttempt } from "./fixscope/record.ts";
 import { CiQueue } from "./queue.ts";
@@ -276,8 +277,8 @@ async function routeRealBug(
 		pool,
 		runId,
 		event,
-		pattern.id,
-		pattern.verifyCommand,
+		pattern,
+		logText, // already fetched above — pass it down, don't refetch
 		budget,
 	);
 	return fixResult;
@@ -289,8 +290,8 @@ async function attemptFix(
 	pool: Pool,
 	runId: string,
 	event: CiEvent,
-	patternId: string,
-	verifyCommand: string,
+	pattern: AllowlistEntry,
+	logText: string,
 	budget: PipelineBudget,
 ): Promise<PipelineResult> {
 	const queue = new CiQueue(pool);
@@ -308,7 +309,13 @@ async function attemptFix(
 		const repoUrl = `https://github.com/${event.repo}.git`;
 		// Branch the worktree off the FAILING commit so the fixer sees the
 		// exact tree that failed (PR branches are not the default branch).
-		worktree = await setupWorktree(repoUrl, runDir, branch, undefined, event.commit);
+		worktree = await setupWorktree(
+			repoUrl,
+			runDir,
+			branch,
+			undefined,
+			event.commit,
+		);
 	} catch (err) {
 		await queue.updateStatus(runId, "escalated");
 		return escalate(
@@ -332,8 +339,42 @@ async function attemptFix(
 	}
 
 	try {
-		// Apply the lint/format fix
-		const fixResult = await applyLintFix(worktree, branch);
+		// The pattern's verifyCommand is the repro command itself, executed in
+		// the worktree after the fix (exit 0 verifies). Fixer selection is keyed
+		// off pattern.id — each active pattern owns its fixer.
+		const verifyCommand = pattern.verifyCommand;
+		let fixResult: {
+			success: boolean;
+			diff: string;
+			filesChanged: number;
+			verificationOutput: string;
+			error?: string;
+			reason?: string;
+		};
+		if (pattern.id === "lint/format") {
+			fixResult = await applyLintFix(
+				worktree,
+				branch,
+				undefined,
+				verifyCommand,
+			);
+		} else if (pattern.id === "import/type") {
+			fixResult = await applyImportFix(
+				worktree,
+				branch,
+				verifyCommand,
+				logText,
+			);
+		} else {
+			// Unreachable via matchPattern (stubs never detect); defensive.
+			fixResult = {
+				success: false,
+				diff: "",
+				filesChanged: 0,
+				verificationOutput: "",
+				error: `no fixer registered for pattern ${pattern.id}`,
+			};
+		}
 
 		// Guardrail: multi-file check on the diff
 		const changedFilesList = fixResult.diff.split("\n").filter((l) => l.trim());
@@ -351,7 +392,7 @@ async function attemptFix(
 		// Record the fix attempt (single attempt — DB unique enforces the cap)
 		await recordFixAttempt(pool, {
 			runId,
-			patternMatched: patternId,
+			patternMatched: pattern.id,
 			diff: fixResult.diff,
 			branch,
 			verificationResult: fixResult.success ? "passed" : "failed",
@@ -369,7 +410,7 @@ async function attemptFix(
 				externalRunId: event.external_run_id,
 				headBranch: branch,
 				baseBranch: event.branch,
-				pattern: patternId,
+				pattern: pattern.id,
 				diffSummary: `${fixResult.filesChanged} files changed`,
 				verification: `${verifyCommand}: passed`,
 			});
@@ -380,8 +421,10 @@ async function attemptFix(
 				event.repo,
 				event.external_run_id,
 				{
-					rootCause: `Lint/format issues detected in the failing job.`,
-					pattern: patternId,
+					rootCause:
+						pattern.rootCause ??
+						`Failure detected in the failing job (pattern: ${pattern.id}).`,
+					pattern: pattern.id,
 					branch,
 					diffSummary: `${fixResult.filesChanged} files changed`,
 					verification: `${verifyCommand}: passed`,
@@ -400,13 +443,15 @@ async function attemptFix(
 			return { runId, path: "fix_delivered" };
 		}
 
-		// Verification failed → escalate, never retry
+		// Verification failed or a guardrail bailed → escalate, never retry
 		return escalate(
 			pool,
 			runId,
 			event,
 			"fix_failed",
-			`Fix applied but verification failed. Diff: ${fixResult.diff.slice(0, 200)}`,
+			`Fix failed: ${
+				fixResult.reason ?? fixResult.error ?? "verification failed"
+			}. Diff: ${fixResult.diff.slice(0, 200)}`,
 			budget,
 		);
 	} finally {
