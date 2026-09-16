@@ -12,7 +12,8 @@ export type CiRunStatus =
 	| "retrying"
 	| "fixing"
 	| "escalated"
-	| "resolved";
+	| "resolved"
+	| "skipped";
 
 export type EscalationReason =
 	| "low_confidence"

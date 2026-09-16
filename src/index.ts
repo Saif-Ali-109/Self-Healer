@@ -6,6 +6,7 @@
 import { loadConfig } from "./config.ts";
 import { closePool, getPool } from "./db/pool.ts";
 import { processCiFailure } from "./pipeline/orchestrator.ts";
+import { CiQueue } from "./pipeline/queue.ts";
 import type { CiEvent } from "./types.ts";
 import { startWebhookServer } from "./webhook/server.ts";
 
@@ -48,6 +49,7 @@ async function main(): Promise<void> {
 // ── Worker: single-threaded FIFO poll loop ────────────────────────────
 
 async function pollLoop(pool: import("pg").Pool): Promise<void> {
+	const queue = new CiQueue(pool);
 	while (true) {
 		try {
 			// Fetch next pending ci_run (FIFO by created_at)
@@ -91,6 +93,17 @@ async function pollLoop(pool: import("pg").Pool): Promise<void> {
 				artifact_url: row.artifact_url ?? undefined,
 				delivered_at: new Date().toISOString(),
 			};
+
+			// Processing-time dedup: one handling cycle per (run, job name).
+			// Rows that were enqueued before the dedup existed (storm backlog)
+			// or that raced it are skipped, never re-processed.
+			if (await queue.isHandledDuplicate(event, row.run_id)) {
+				await queue.markSkipped(row.run_id, "duplicate_re_fire");
+				console.log(
+					`[worker] run ${row.run_id} → skipped (duplicate re-fire: ${row.job_name} already queued/handled for run ${row.external_run_id})`,
+				);
+				continue;
+			}
 
 			const result2 = await processCiFailure(event, {
 				runId: row.run_id,

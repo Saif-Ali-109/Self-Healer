@@ -1,5 +1,6 @@
 import type { Pool, QueryResult } from "pg";
 import type { CiEvent, CiRunStatus } from "../types.ts";
+import { chainCiEvent } from "../sor/ciEvents.ts";
 
 export interface EnqueueResult {
 	ok: boolean;
@@ -66,5 +67,38 @@ export class CiQueue {
 			`UPDATE ci_runs SET ${setClauses.join(", ")} WHERE run_id = $2`,
 			[status, runId],
 		);
+	}
+
+	/**
+	 * Processing-time dedup: one handling cycle per (repo, external_run_id,
+	 * job_name). If ANY other row already exists for the same failure (same run
+	 * id + job name — the reporter re-fires those with new job IDs on every
+	 * workflow-run completion during rerun cycles), the pending row is a
+	 * duplicate re-fire and must be skipped, never re-processed.
+	 */
+	async isHandledDuplicate(
+		ev: CiEvent,
+		excludeRunId: string,
+	): Promise<boolean> {
+		if (!ev.job_name) return false;
+		const existing = await this.pool.query(
+			"SELECT 1 FROM ci_runs WHERE external_run_id = $1 AND repo = $2 AND job_name = $3 AND run_id != $4 LIMIT 1",
+			[ev.external_run_id, ev.repo, ev.job_name, excludeRunId],
+		);
+		return (existing.rowCount ?? 0) > 0;
+	}
+
+	/** Mark a duplicate re-fire row as skipped (terminal, no side effects). */
+	async markSkipped(runId: string, reason: string): Promise<void> {
+		await this.pool.query(
+			`UPDATE ci_runs SET status = 'skipped', completed_at = now()
+			 WHERE run_id = $1 AND status = 'pending'`,
+			[runId],
+		);
+		await chainCiEvent(this.pool, runId, "ci_run_transition", {
+			from: "pending",
+			to: "skipped",
+			reason,
+		});
 	}
 }
