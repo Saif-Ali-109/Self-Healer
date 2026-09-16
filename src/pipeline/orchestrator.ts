@@ -304,7 +304,9 @@ async function attemptFix(
 	try {
 		// We need the repo URL — derive from the repo slug
 		const repoUrl = `https://github.com/${event.repo}.git`;
-		worktree = await setupWorktree(repoUrl, runDir, branch);
+		// Branch the worktree off the FAILING commit so the fixer sees the
+		// exact tree that failed (PR branches are not the default branch).
+		worktree = await setupWorktree(repoUrl, runDir, branch, undefined, event.commit);
 	} catch (err) {
 		await queue.updateStatus(runId, "escalated");
 		return escalate(
