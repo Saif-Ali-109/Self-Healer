@@ -24,7 +24,7 @@ export interface LintFixResult {
  * Run formatter in the worktree, verify (lint exits 0), commit + push.
  *
  * Steps:
- * 1. Run the fixer command (e.g. `npx biome check --write .`) in the worktree
+ * 1. Run the fixer command (e.g. `npx @biomejs/biome check --write .`) in the worktree
  * 2. Check for a non-empty diff
  * 3. Run the verifier (linter again) — must exit 0
  * 4. Stage all changes, commit, push to origin/<branch>
@@ -32,8 +32,8 @@ export interface LintFixResult {
 export async function applyLintFix(
 	worktree: WorktreeHandle,
 	branch: string,
-	fixerCommand: string = "npx biome check --write .",
-	verifierCommand: string = "npx biome check .",
+	fixerCommand: string = "npx @biomejs/biome check --write .",
+	verifierCommand: string = "npx @biomejs/biome check .",
 ): Promise<LintFixResult> {
 	try {
 		// Step 1: Apply the fixer

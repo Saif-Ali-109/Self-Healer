@@ -18,7 +18,7 @@ const ENTRIES: AllowlistEntry[] = [
 			/lint\s+error|formatting?\s+error|prettier|biome\s+check|eslint|expected\s+.*but\s+received/i.test(
 				log,
 			),
-		verifyCommand: "npx biome check --write .",
+		verifyCommand: "npx @biomejs/biome check --write .",
 	},
 	{
 		id: "snapshot",
