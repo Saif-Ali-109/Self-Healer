@@ -59,7 +59,8 @@ export interface OpenFixPrInput {
 /**
  * Open a fix-only PR from `headBranch` (ci-fix/<run-id>) to `baseBranch`
  * (the failing branch) so a human can approve it via normal GitHub review.
- * Best-effort and NON-FATAL: any failure warns and returns null — the fix
+ * Best-effort and NON-FATAL with a small retry (the sandbox's api.github.com
+ * link is flaky): any persistent failure warns and returns null — the fix
  * comment delivery still proceeds. Never merges.
  */
 export async function openFixPr(
@@ -73,53 +74,65 @@ export async function openFixPr(
 	) {
 		return null;
 	}
-	try {
-		// Idempotency: reuse an existing open PR for this head branch.
-		const existing = await gh([
-			"api",
-			`repos/${opts.repo}/pulls?state=open&per_page=100`,
-			"--jq",
-			`[.[] | select(.head.ref == "${opts.headBranch}") | .html_url][0]`,
-		]);
-		if (existing.trim()) return existing.trim();
+	const MAX_ATTEMPTS = 3;
+	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+		try {
+			// Idempotency: reuse an existing open PR for this head branch.
+			const existing = await gh([
+				"api",
+				`repos/${opts.repo}/pulls?state=open&per_page=100`,
+				"--jq",
+				`[.[] | select(.head.ref == "${opts.headBranch}") | .html_url][0]`,
+			]);
+			if (existing.trim()) return existing.trim();
 
-		const body = buildFixPrBody({
-			externalRunId: opts.externalRunId,
-			pattern: opts.pattern,
-			branch: opts.headBranch,
-			baseBranch: opts.baseBranch,
-			diffSummary: opts.diffSummary,
-			verification: opts.verification,
-		});
-		const url = await gh([
-			"api",
-			`repos/${opts.repo}/pulls`,
-			"--method",
-			"POST",
-			"-f",
-			`title=${buildFixPrTitle(opts.externalRunId)}`,
-			"-f",
-			`head=${opts.headBranch}`,
-			"-f",
-			`base=${opts.baseBranch}`,
-			"-f",
-			`body=${body}`,
-			"--jq",
-			".html_url",
-		]);
-		const htmlUrl = url.trim();
-		if (!htmlUrl) return null;
+			const body = buildFixPrBody({
+				externalRunId: opts.externalRunId,
+				pattern: opts.pattern,
+				branch: opts.headBranch,
+				baseBranch: opts.baseBranch,
+				diffSummary: opts.diffSummary,
+				verification: opts.verification,
+			});
+			const url = await gh([
+				"api",
+				`repos/${opts.repo}/pulls`,
+				"--method",
+				"POST",
+				"-f",
+				`title=${buildFixPrTitle(opts.externalRunId)}`,
+				"-f",
+				`head=${opts.headBranch}`,
+				"-f",
+				`base=${opts.baseBranch}`,
+				"-f",
+				`body=${body}`,
+				"--jq",
+				".html_url",
+			]);
+			const htmlUrl = url.trim();
+			if (!htmlUrl) return null;
 
-		await pool.query(
-			"UPDATE fix_attempts SET fix_pr_url = $1 WHERE run_id = $2",
-			[htmlUrl, opts.runId],
-		);
-		console.log(
-			`[fixpr] opened fix PR ${htmlUrl} (${opts.headBranch} → ${opts.baseBranch})`,
-		);
-		return htmlUrl;
-	} catch (err) {
-		console.warn("[fixpr] failed to open fix PR (non-fatal):", err);
-		return null;
+			await pool.query(
+				"UPDATE fix_attempts SET fix_pr_url = $1 WHERE run_id = $2",
+				[htmlUrl, opts.runId],
+			);
+			console.log(
+				`[fixpr] opened fix PR ${htmlUrl} (${opts.headBranch} → ${opts.baseBranch})`,
+			);
+			return htmlUrl;
+		} catch (err) {
+			console.warn(
+				`[fixpr] attempt ${attempt}/${MAX_ATTEMPTS} failed to open fix PR (non-fatal):`,
+				err,
+			);
+			if (attempt < MAX_ATTEMPTS) {
+				await sleep(attempt * 2_000); // 2s, 4s backoff
+			}
+		}
 	}
+	return null;
 }
+
+const sleep = (ms: number): Promise<void> =>
+	new Promise((r) => setTimeout(r, ms));
