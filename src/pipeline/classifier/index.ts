@@ -27,8 +27,13 @@ export function stripLogTimestamps(logText: string): string {
 
 /**
  * Fetch job logs via gh CLI (best-effort).
+ * Shared by the classifier and the fix-scope allowlist matcher so both see
+ * the same cleaned log text (BOM + timestamp prefixes stripped).
  */
-async function fetchJobLogs(repo: string, logUrl: string): Promise<string> {
+export async function fetchJobLogs(
+	repo: string,
+	logUrl: string,
+): Promise<string> {
 	try {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");

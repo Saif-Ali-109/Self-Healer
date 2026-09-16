@@ -24,7 +24,7 @@ import {
 	MULTI_FILE_THRESHOLD,
 } from "../types.ts";
 import { PipelineBudget } from "../utils/budget.ts";
-import { classify } from "./classifier/index.ts";
+import { classify, fetchJobLogs } from "./classifier/index.ts";
 import { writeEscalation } from "./escalation/writer.ts";
 import { matchPattern } from "./fixscope/allowlist.ts";
 import { applyLintFix } from "./fixscope/lintfixer.ts";
@@ -253,8 +253,8 @@ async function routeRealBug(
 		);
 	}
 
-	// Fetch logs for pattern matching
-	const logText = await fetchLogText(event.log_url);
+	// Fetch logs for pattern matching (shared helper — cleaned of BOM + timestamps)
+	const logText = await fetchJobLogs(event.repo, event.log_url);
 
 	// Guardrail: allowlist match required
 	const pattern = matchPattern(logText);
@@ -425,24 +425,4 @@ async function escalate(
 	});
 
 	return { runId, path: "escalated", reason };
-}
-
-// ── Log fetching ─────────────────────────────────────────────────────
-
-async function fetchLogText(logUrl: string): Promise<string> {
-	try {
-		const { execFile } = await import("node:child_process");
-		const { promisify } = await import("node:util");
-		const exec = promisify(execFile);
-		const match = logUrl.match(/\/jobs\/(\d+)$/);
-		if (!match) return "";
-		const result = await exec(
-			"gh",
-			["api", `repos/{owner}/{repo}/actions/jobs/${match[1]}/logs`],
-			{ maxBuffer: 32 * 1024 * 1024 },
-		);
-		return result.stdout ?? "";
-	} catch {
-		return "";
-	}
 }
