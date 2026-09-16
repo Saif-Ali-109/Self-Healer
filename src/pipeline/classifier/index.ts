@@ -16,9 +16,10 @@ async function fetchJobLogs(repo: string, logUrl: string): Promise<string> {
 		const match = logUrl.match(/\/jobs\/(\d+)$/);
 		if (!match) return "";
 		const jobId = match[1];
+		// The logs endpoint returns plain text (not JSON), so no --jq flag.
 		const result = await exec(
 			"gh",
-			["api", `repos/${repo}/actions/jobs/${jobId}/logs`, "--jq", "."],
+			["api", `repos/${repo}/actions/jobs/${jobId}/logs`],
 			{ maxBuffer: 32 * 1024 * 1024 },
 		);
 		return result.stdout;
