@@ -175,6 +175,7 @@ async function routeFlaky(
 		repo: event.repo,
 		externalRunId: event.external_run_id,
 		jobId: event.job_id,
+		jobName: event.job_name,
 		commit: event.commit,
 	});
 

@@ -28,17 +28,25 @@ export interface RetryResult {
 }
 
 /**
- * Retry a flaky CI job up to MAX_RERUNS times via the GitHub Actions rerun API.
+ * Retry a flaky CI job up to MAX_RERUNS times.
+ *
+ * Reruns ONLY the failing job (`actions/jobs/{id}/rerun`) — never
+ * `rerun-failed-jobs`, which restarts every failed job in the run and, because
+ * each re-completion re-fires the reporter, amplifies CI churn across rerun
+ * cycles. After each POST we wait for the workflow RUN to complete a NEW
+ * attempt (run_attempt must advance) before issuing the next rerun, so we never
+ * race the previous rerun the way polling the stale job ID did (which caused
+ * `This workflow is already running (HTTP 403)` on every attempt ≥ 2).
  *
  * For each attempt:
  *   1. Update ci_runs.status → 'retrying'
- *   2. Call `gh api repos/{repo}/actions/runs/{runId}/rerun-failed-jobs`
- *   3. Poll job status via `gh api repos/{repo}/actions/jobs/{jobId}` until completed
- *   4. If conclusion === 'success' → resolved; break
- *   5. If not → continue rerunning (up to MAX_RERUNS)
+ *   2. `gh api repos/{repo}/actions/jobs/{jobId}/rerun` (single job)
+ *   3. Poll the run until status=completed AND run_attempt > attemptBefore
+ *   4. Fetch the newest job instance with this name; conclusion === 'success' → resolved
+ *   5. Otherwise continue (up to MAX_RERUNS)
  *
- * On resolution: post flaky-resolved comment, chain SOR event, update status → 'resolved'
- * On exhaustion: update status → 'escalated' (caller should then invoke escalation writer)
+ * On resolution: post flaky-resolved comment, chain SOR event, status → 'resolved'
+ * On exhaustion: status → 'escalated' (caller then invokes the escalation writer)
  */
 export async function retryFlaky(
 	pool: Pool,
@@ -47,6 +55,7 @@ export async function retryFlaky(
 		repo: string;
 		externalRunId: string;
 		jobId: string;
+		jobName: string;
 		commit: string;
 		logUrl?: string;
 	},
@@ -55,7 +64,7 @@ export async function retryFlaky(
 
 	for (let attempt = 1; attempt <= MAX_RERUNS; attempt++) {
 		console.log(
-			`[retry] rerun ${attempt}/${MAX_RERUNS} for run ${opts.externalRunId}`,
+			`[retry] rerun ${attempt}/${MAX_RERUNS} for run ${opts.externalRunId} job ${opts.jobName}`,
 		);
 
 		// Update status
@@ -65,11 +74,14 @@ export async function retryFlaky(
 			attempt,
 		});
 
+		// Snapshot the current attempt so we can detect our rerun completing.
+		const attemptBefore = await getRunAttempt(opts.repo, opts.externalRunId);
+
 		try {
-			// Trigger rerun via GitHub API
+			// Trigger a rerun of ONLY this job
 			await gh([
 				"api",
-				`repos/${opts.repo}/actions/runs/${opts.externalRunId}/rerun-failed-jobs`,
+				`repos/${opts.repo}/actions/jobs/${opts.jobId}/rerun`,
 				"--method",
 				"POST",
 			]);
@@ -78,14 +90,27 @@ export async function retryFlaky(
 			// Non-fatal: we still wait and check — the run might already be running
 		}
 
-		// Poll for job completion (up to 5 minutes per attempt, 10s interval)
-		const completed = await pollJobCompletion(
+		// Wait for the rerun's attempt to actually complete (up to 5 min, 10s interval)
+		const completedAttempt = await pollRunForRerun(
 			opts.repo,
-			opts.jobId,
+			opts.externalRunId,
+			attemptBefore,
 			5 * 60 * 1000,
 		);
+		if (completedAttempt === null) {
+			console.warn(
+				`[retry] rerun ${attempt} did not observe a completed attempt (timeout)`,
+			);
+			continue;
+		}
 
-		if (completed && completed.conclusion === "success") {
+		const rerunConclusion = await jobConclusionForRun(
+			opts.repo,
+			opts.externalRunId,
+			opts.jobName,
+		);
+
+		if (rerunConclusion === "success") {
 			// Resolved!
 			await queue.updateStatus(opts.runId, "resolved");
 			await chainCiEvent(pool, opts.runId, "ci_run_transition", {
@@ -107,7 +132,7 @@ export async function retryFlaky(
 		}
 
 		console.log(
-			`[retry] rerun ${attempt} still failed (conclusion: ${completed?.conclusion ?? "unknown"})`,
+			`[retry] rerun ${attempt} still failed (conclusion: ${rerunConclusion ?? "unknown"})`,
 		);
 	}
 
@@ -129,15 +154,33 @@ export async function retryFlaky(
 	};
 }
 
+/** Current run_attempt of a workflow run (0 if unknown). */
+async function getRunAttempt(repo: string, runId: string): Promise<number> {
+	try {
+		const raw = await gh([
+			"api",
+			`repos/${repo}/actions/runs/${runId}`,
+			"--jq",
+			".run_attempt",
+		]);
+		const n = Number.parseInt(raw.trim(), 10);
+		return Number.isFinite(n) ? n : 0;
+	} catch {
+		return 0;
+	}
+}
+
 /**
- * Poll a GitHub Actions job until it completes or the timeout expires.
- * Returns the job's conclusion ('success'|'failure'|'cancelled'|null) or null on timeout.
+ * Wait until the workflow run completes a NEW attempt (run_attempt greater than
+ * `attemptBefore`), i.e. our single-job rerun actually ran to completion.
+ * Returns the new run_attempt, or null on timeout.
  */
-async function pollJobCompletion(
+async function pollRunForRerun(
 	repo: string,
-	jobId: string,
+	runId: string,
+	attemptBefore: number,
 	timeoutMs: number,
-): Promise<{ conclusion: string | null } | null> {
+): Promise<number | null> {
 	const deadline = Date.now() + timeoutMs;
 	const pollInterval = 10_000; // 10 seconds
 
@@ -145,16 +188,13 @@ async function pollJobCompletion(
 		try {
 			const raw = await gh([
 				"api",
-				`repos/${repo}/actions/jobs/${jobId}`,
+				`repos/${repo}/actions/runs/${runId}`,
 				"--jq",
-				"{conclusion: .conclusion, status: .status}",
+				"{attempt: .run_attempt, status: .status}",
 			]);
-			const job = JSON.parse(raw) as {
-				conclusion: string | null;
-				status: string;
-			};
-			if (job.status === "completed") {
-				return { conclusion: job.conclusion };
+			const run = JSON.parse(raw) as { attempt?: number; status: string };
+			if (run.status === "completed" && (run.attempt ?? 0) > attemptBefore) {
+				return run.attempt ?? null;
 			}
 		} catch {
 			// Non-fatal: keep polling
@@ -162,4 +202,30 @@ async function pollJobCompletion(
 		await sleep(pollInterval);
 	}
 	return null; // timeout
+}
+
+/**
+ * After a rerun completes, find the newest job instance in the run matching
+ * `jobName` and return its conclusion ('success' | 'failure' | null).
+ * Single-job reruns re-create the job (new ID, same name), so the newest
+ * instance by started_at is the result of our rerun.
+ */
+async function jobConclusionForRun(
+	repo: string,
+	runId: string,
+	jobName: string,
+): Promise<string | null> {
+	try {
+		const raw = await gh([
+			"api",
+			`repos/${repo}/actions/runs/${runId}/jobs`,
+			"--paginate",
+			"--jq",
+			`[.jobs[] | select(.name == "${jobName}")] | sort_by(.started_at) | last | .conclusion`,
+		]);
+		const c = raw.trim();
+		return c && c !== "null" ? c : null;
+	} catch {
+		return null;
+	}
 }

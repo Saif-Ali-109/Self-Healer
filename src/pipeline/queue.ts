@@ -15,6 +15,21 @@ export class CiQueue {
 	constructor(private pool: Pool) {}
 
 	async enqueue(ev: CiEvent): Promise<EnqueueResult> {
+		// Per-job-name dedup: the reporter re-fires on every workflow-run
+		// completion during rerun cycles — the same failure keeps arriving with
+		// NEW job IDs but the SAME job name. One handling per (run, job name) is
+		// enough; later re-fires are duplicates. (If the event has no job name,
+		// fall back to the (external_run_id, repo, job_id) unique index below.)
+		if (ev.job_name) {
+			const existing = await this.pool.query(
+				"SELECT 1 FROM ci_runs WHERE external_run_id = $1 AND repo = $2 AND job_name = $3 LIMIT 1",
+				[ev.external_run_id, ev.repo, ev.job_name],
+			);
+			if ((existing.rowCount ?? 0) > 0) {
+				return { ok: true, duplicate: true };
+			}
+		}
+
 		try {
 			const result: QueryResult<{ run_id: string }> = await this.pool.query(
 				`INSERT INTO ci_runs (external_run_id, repo, commit, branch, job_id, job_name, status, log_url, artifact_url, created_at)
