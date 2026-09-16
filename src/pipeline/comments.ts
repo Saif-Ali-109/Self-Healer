@@ -17,6 +17,51 @@ export function redactSecrets(text: string): string {
 		.replace(/sk-[A-Za-z0-9]{20,}/g, "***");
 }
 
+/**
+ * Choose where a comment should land for a workflow run.
+ * GitHub has no `actions/runs/{id}/comments` endpoint (it 404s), so we attach
+ * to the run's pull request if one exists, else to the head commit.
+ * Returns an API path suffix like `issues/42` or `commits/<sha>`, or null when
+ * no target is available.
+ */
+export function pickCommentTarget(
+	pullRequestNumbers: ReadonlyArray<number> | undefined,
+	commitSha: string,
+): string | null {
+	if (pullRequestNumbers && pullRequestNumbers.length > 0)
+		return `issues/${pullRequestNumbers[0]}`;
+	if (commitSha) return `commits/${commitSha}`;
+	return null;
+}
+
+/** Fetch PR numbers + head SHA for an Actions run (best-effort). */
+async function fetchRunTarget(
+	repo: string,
+	externalRunId: string,
+): Promise<string | null> {
+	const prs = await gh([
+		"api",
+		`repos/${repo}/actions/runs/${externalRunId}`,
+		"--jq",
+		`[.pull_requests[].number] | join(",")`,
+	]);
+	const numbers = prs
+		.trim()
+		.split(",")
+		.filter(Boolean)
+		.map((n) => Number(n));
+
+	const headSha = (
+		await gh([
+			"api",
+			`repos/${repo}/actions/runs/${externalRunId}`,
+			"--jq",
+			".head_sha",
+		])
+	).trim();
+	return pickCommentTarget(numbers, headSha);
+}
+
 async function postComment(
 	repo: string,
 	externalRunId: string,
@@ -32,9 +77,14 @@ async function postComment(
 	}
 	const redacted = redactSecrets(body);
 	try {
+		const target = await fetchRunTarget(repo, externalRunId);
+		if (!target) {
+			console.warn("[comments] no comment target (no PR and no head_sha)");
+			return null;
+		}
 		const result = await gh([
 			"api",
-			`repos/${repo}/actions/runs/${externalRunId}/comments`,
+			`repos/${repo}/${target}/comments`,
 			"--method",
 			"POST",
 			"-f",
