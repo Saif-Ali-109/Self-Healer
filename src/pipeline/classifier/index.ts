@@ -5,6 +5,27 @@ import { CLASSIFIER_VERSION } from "../../types.ts";
 import { classifyFromSignals, detectSignals } from "./signals.ts";
 
 /**
+ * GitHub Actions job logs (raw text) prefix every line with an ISO timestamp:
+ *   `2026-09-16T14:05:26.3140171Z <content>`
+ * The microsecond digits can contain sequences like `401`, `429` or `503`,
+ * which the infra signal detector would otherwise misread as HTTP status
+ * codes (documented false positive). Strip the prefix (and the leading UTF-8
+ * BOM) before signal detection.
+ */
+export function stripLogTimestamps(logText: string): string {
+	return logText
+		.replace(/^\uFEFF/, "")
+		.split("\n")
+		.map((line) =>
+			line.replace(
+				/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*/,
+				"",
+			),
+		)
+		.join("\n");
+}
+
+/**
  * Fetch job logs via gh CLI (best-effort).
  */
 async function fetchJobLogs(repo: string, logUrl: string): Promise<string> {
@@ -22,7 +43,7 @@ async function fetchJobLogs(repo: string, logUrl: string): Promise<string> {
 			["api", `repos/${repo}/actions/jobs/${jobId}/logs`],
 			{ maxBuffer: 32 * 1024 * 1024 },
 		);
-		return result.stdout;
+		return stripLogTimestamps(result.stdout);
 	} catch {
 		return ""; // best-effort
 	}

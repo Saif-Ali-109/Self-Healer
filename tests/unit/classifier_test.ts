@@ -1,6 +1,7 @@
 // T017 — classifier signals + confidence scoring (contracts/classification.md)
 
 import { describe, expect, it } from "vitest";
+import { stripLogTimestamps } from "../../src/pipeline/classifier/index.ts";
 import {
 	classifyFromSignals,
 	detectSignals,
@@ -47,9 +48,29 @@ describe("detectSignals", () => {
 	});
 
 	it("returns no signals for a generic failure", () => {
-		expect(
-			detectSignals("Expected 'x' but received 'y' in widget.test.ts"),
-		).toEqual([]);
+		expect(detectSignals("Expected 'x' but received 'y' in widget.test.ts")).toEqual(
+			[],
+		);
+	});
+});
+
+describe("stripLogTimestamps", () => {
+	it("removes ISO timestamp prefixes and the BOM", () => {
+		const raw =
+			"\uFEFF2026-09-16T14:05:26.3140171Z ##[error]File content differs\n2026-09-16T14:05:27.0000000Z   at foo.ts:1:2\nplain line";
+		expect(stripLogTimestamps(raw)).toBe(
+			"##[error]File content differs\nat foo.ts:1:2\nplain line",
+		);
+	});
+
+	it("no longer trips infra signals via digits inside timestamps", () => {
+		// The microseconds in this timestamp contain `401`; the UTF-8 BOM and the
+		// `token: ***` line must not create a false infra classification.
+		const raw =
+			"\uFEFF2026-09-16T14:05:26.3140171Z ##[group]GITHUB_TOKEN Permissions\n2026-09-16T14:05:26.3140171Z   token: ***\n2026-09-16T14:05:26.3140171Z ##[error]File content differs from formatting output";
+		const signals = detectSignals(stripLogTimestamps(raw));
+		expect(signals.filter((s) => s.category === "infra")).toEqual([]);
+		expect(signals).toEqual([]);
 	});
 });
 
