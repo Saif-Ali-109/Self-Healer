@@ -185,6 +185,21 @@ description: "Task list template for feature implementation"
 
 ---
 
+## Phase 9: v1.3.0 Standalone Transition & Packaging (US6)
+
+**Purpose**: Drop the Fleet clone + PostgreSQL entirely; ship as a zero-dependency standalone package with a CLI.
+
+- [X] T045 Replace pg with `node:sqlite` — `src/db/sqlite.ts` wrapper (pg-shaped `query()`, `$N`→`?`, `now()`→unix-ms rewrite), `src/db/pool.ts` (Pool type + singleton), `src/db/migrate.ts` (DatabaseSync runner, package-relative `migrations/`)
+- [X] T046 Rewrite migrations 017–023 as SQLite DDL (TEXT PKs with `randomblob`-hex defaults, INTEGER timestamps, `'skipped'` folded into 017, 021 no-op, 023 `watched_repos`)
+- [X] T047 Standalone SOR — `src/sor/{events,signer,chain,verify,verifyCli,repairCli}.ts`: HMAC-SHA256 hash chain in SQLite, genesis seed idempotent, CLI verify/repair
+- [X] T048 Standalone worktrees — `src/pipeline/worktree.ts` (direct `git worktree add/remove`), no Fleet imports anywhere
+- [X] T049 [US6] CLI — `src/cli/{init,enable,start,status}.ts` + `src/daemonEntry.ts`: `init` (generate secrets → `.env` + SQLite DB + migrate), `enable --repo o/r` (reporter PR via GitHub API + `watched_repos`), `start` (foreground / detached `dist/daemon.mjs`), `status`
+- [X] T050 [US6] Packaging — esbuild bundles to `dist/` (build-time only; zero runtime deps — Node type-stripping doesn't work under `node_modules`, so TS can't ship raw), `bin/self-healer.mjs` pins `SELF_HEALER_PKG`, `"files"` = bin/dist/migrations/assets/.env.example
+- [X] T051 [US6] Global-install validation — `npm pack` → `npm i -g` → `init`/`status`/`start` from a fresh project; daemon boots from `dist/daemon.mjs` under node_modules; webhook accepts on `:3457`
+- [X] T052 Verify standalone end-to-end — typecheck clean, 88/88 tests, `sor:verify` `ok: yes`, `migrate:up`/`down` idempotent, SOR tamper test green on SQLite
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

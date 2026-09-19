@@ -40,8 +40,15 @@ switch (command) {
 		await cliInit(args.includes("--force"));
 		break;
 	case "enable": {
-		const repoFlag = args.find((a) => a.startsWith("--repo="));
-		const repo = repoFlag?.slice("--repo=".length) ?? args[1];
+		const flagIdx = args.findIndex(
+			(a) => a === "--repo" || a.startsWith("--repo="),
+		);
+		const repo =
+			flagIdx >= 0
+				? args[flagIdx].startsWith("--repo=")
+					? args[flagIdx].slice("--repo=".length)
+					: args[flagIdx + 1]
+				: undefined;
 		if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
 			fail("usage: self-healer enable --repo owner/repo");
 		}
