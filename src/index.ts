@@ -4,6 +4,7 @@
 // Env:   see .env.example (GH_TOKEN, CI_WEBHOOK_SECRET, DATABASE_URL, SOR_SIGNING_KEY)
 
 import { loadConfig } from "./config.ts";
+import type { Pool } from "./db/pool.ts";
 import { closePool, getPool } from "./db/pool.ts";
 import { processCiFailure } from "./pipeline/orchestrator.ts";
 import { CiQueue } from "./pipeline/queue.ts";
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
 
 // ── Worker: single-threaded FIFO poll loop ────────────────────────────
 
-async function pollLoop(pool: import("pg").Pool): Promise<void> {
+async function pollLoop(pool: Pool): Promise<void> {
 	const queue = new CiQueue(pool);
 	while (true) {
 		try {
@@ -64,7 +65,7 @@ async function pollLoop(pool: import("pg").Pool): Promise<void> {
 				log_url: string;
 				artifact_url: string | null;
 			}>(
-				`SELECT run_id, external_run_id, repo, commit, branch, job_id, job_name, log_url, artifact_url
+				`SELECT run_id, external_run_id, repo, "commit", branch, job_id, job_name, log_url, artifact_url
 				 FROM ci_runs
 				 WHERE status = 'pending'
 				 ORDER BY created_at ASC

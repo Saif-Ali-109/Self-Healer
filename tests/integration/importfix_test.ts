@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
-import type { WorktreeHandle } from "../../fleet/src/git/worktree.ts";
+import type { WorktreeHandle } from "../../src/pipeline/worktree.ts";
 import { applyImportFix } from "../../src/pipeline/fixscope/importfixer.ts";
 
 const exec = promisify(execFile);

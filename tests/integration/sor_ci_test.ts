@@ -2,7 +2,7 @@
 // Chains events → verify ok → tamper → verify fails → restore → verify ok.
 
 import { describe, expect, it } from "vitest";
-import { runSorVerify } from "../../fleet/src/sor/verify.ts";
+import { runSorVerify } from "../../src/sor/verify.ts";
 import { reconstructRun } from "../../src/audit/reconstruct.ts";
 import { chainCiEvent } from "../../src/sor/ciEvents.ts";
 import {
@@ -43,35 +43,31 @@ describe.skipIf(!hasDb || !process.env.SOR_SIGNING_KEY)(
 				confidence: 0.9,
 			});
 
-			// The app cannot tamper via SQL (append-only trigger). Simulate an
-			// external tamper: disable the trigger, modify the payload, re-enable.
-			await pool.query(
-				"ALTER TABLE audit_events DISABLE TRIGGER audit_events_append_only_trigger",
-			);
-			await pool.query(
-				`UPDATE audit_events
-			 SET payload = payload || '{"tampered":true}'::jsonb
-			 WHERE run_id = $1 AND payload->>'kind' = 'ci_classification'`,
+			// Simulate an external tamper: overwrite the payload JSON directly.
+			const target = await pool.query<{
+				event_id: string;
+				payload: string;
+			}>(
+				"SELECT event_id, payload FROM audit_events WHERE run_id = $1 AND payload LIKE '%ci_classification%' ORDER BY seq DESC LIMIT 1",
 				[runId],
 			);
+			const eventId = target.rows[0]!.event_id;
+			const original = target.rows[0]!.payload;
+			const tampered = JSON.stringify({
+				...(JSON.parse(original) as Record<string, unknown>),
+				tampered: true,
+			});
 			await pool.query(
-				"ALTER TABLE audit_events ENABLE TRIGGER audit_events_append_only_trigger",
+				"UPDATE audit_events SET payload = $1 WHERE event_id = $2",
+				[tampered, eventId],
 			);
 			const badCode = await runSorVerify(pool);
 			expect(badCode).toBe(1);
 
-			// Restore the original payload (bypassing the trigger) → chain valid.
+			// Restore the original payload → chain valid again.
 			await pool.query(
-				"ALTER TABLE audit_events DISABLE TRIGGER audit_events_append_only_trigger",
-			);
-			await pool.query(
-				`UPDATE audit_events
-			 SET payload = payload - 'tampered'
-			 WHERE run_id = $1 AND payload->>'kind' = 'ci_classification'`,
-				[runId],
-			);
-			await pool.query(
-				"ALTER TABLE audit_events ENABLE TRIGGER audit_events_append_only_trigger",
+				"UPDATE audit_events SET payload = $1 WHERE event_id = $2",
+				[original, eventId],
 			);
 			const okCode = await runSorVerify(pool);
 			expect(okCode).toBe(0);
@@ -91,13 +87,15 @@ describe.skipIf(!hasDb || !process.env.SOR_SIGNING_KEY)(
 				branch: "ci-fix/01234567",
 			});
 
-			const sor = await pool.query(
-				"SELECT payload FROM audit_events WHERE run_id = $1 ORDER BY created_at ASC",
+			const sor = await pool.query<{ payload: string }>(
+				"SELECT payload FROM audit_events WHERE run_id = $1 ORDER BY seq ASC",
 				[runId],
 			);
 			expect(sor.rows.length).toBe(2);
-			expect(sor.rows[0]?.payload?.kind).toBe("ci_classification");
-			expect(sor.rows[1]?.payload?.kind).toBe("ci_fix_attempt");
+			const first = JSON.parse(sor.rows[0]!.payload) as { kind: string };
+			const second = JSON.parse(sor.rows[1]!.payload) as { kind: string };
+			expect(first.kind).toBe("ci_classification");
+			expect(second.kind).toBe("ci_fix_attempt");
 
 			const code = await runSorVerify(pool);
 			expect(code).toBe(0);

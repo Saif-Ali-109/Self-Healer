@@ -5,7 +5,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Pool } from "pg";
+import type { Pool } from "../../db/pool.ts";
 
 const exec = promisify(execFile);
 

@@ -2,4 +2,4 @@
 -- UP:
 ALTER TABLE fix_attempts ADD COLUMN fix_pr_url TEXT;
 -- DOWN:
-ALTER TABLE fix_attempts DROP COLUMN IF EXISTS fix_pr_url;
+ALTER TABLE fix_attempts DROP COLUMN fix_pr_url;

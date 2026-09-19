@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool } from "../../db/pool.ts";
 import { chainCiEvent } from "../../sor/ciEvents.ts";
 import type { ClassificationResult } from "../../types.ts";
 import { CLASSIFIER_VERSION } from "../../types.ts";

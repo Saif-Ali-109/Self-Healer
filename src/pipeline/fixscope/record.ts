@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool } from "../../db/pool.ts";
 import { chainCiEvent } from "../../sor/ciEvents.ts";
 import type { FixAttemptRecord, FixVerificationResult } from "../../types.ts";
 

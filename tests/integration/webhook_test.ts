@@ -81,7 +81,7 @@ describe.skipIf(!hasDb)("webhook contract (POST /api/webhook/ci)", () => {
 		expect(res.body).toEqual({ ok: true, skipped: "agent branch" });
 		// No ci_runs row is created for the agent's own branch
 		const row = await pool.query(
-			"SELECT count(*)::int AS n FROM ci_runs WHERE external_run_id = '1234567890' AND branch = 'ci-fix/01234567'",
+			"SELECT count(*) AS n FROM ci_runs WHERE external_run_id = '1234567890' AND branch = 'ci-fix/01234567'",
 		);
 		expect(row.rows[0]?.n).toBe(0);
 	});

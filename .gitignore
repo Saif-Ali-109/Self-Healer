@@ -22,3 +22,10 @@ build/
 
 # CI worktree scratch directory (cloned repos + diffs)
 .runs/
+
+# SQLite database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/

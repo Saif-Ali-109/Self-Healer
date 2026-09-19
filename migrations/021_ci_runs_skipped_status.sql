@@ -1,13 +1,10 @@
--- 021 ci_runs: allow 'skipped' status for deduplicated re-fired events
+-- 021 ci_runs: 'skipped' status (SQLite no-op — folded into 017)
 --
--- The reporter workflow re-fires on every workflow-run completion during rerun
--- cycles (same run id, same job name, new job id). Those re-fires are dropped
--- at enqueue time by the per-(external_run_id, repo, job_name) dedup, and any
--- rows that were already queued before the dedup existed are drained to
--- 'skipped' by the worker instead of being re-processed.
+-- PostgreSQL altered the CHECK constraint via ALTER TABLE. SQLite cannot
+-- alter a CHECK constraint, so the 'skipped' status is part of 017's schema
+-- from the start. This migration is a documented no-op for migration-number
+-- continuity (001–022 applied in order).
 -- UP:
-ALTER TABLE ci_runs DROP CONSTRAINT ci_runs_status_check;
-ALTER TABLE ci_runs ADD CONSTRAINT ci_runs_status_check CHECK (status IN ('pending','classifying','retrying','fixing','escalated','resolved','skipped'));
+SELECT 1;
 -- DOWN:
-ALTER TABLE ci_runs DROP CONSTRAINT ci_runs_status_check;
-ALTER TABLE ci_runs ADD CONSTRAINT ci_runs_status_check CHECK (status IN ('pending','classifying','retrying','fixing','escalated','resolved'));
+SELECT 1;

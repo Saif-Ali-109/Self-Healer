@@ -6,9 +6,10 @@
 // CLI: npx tsx src/audit/reconstruct.ts <run-id>
 //   (reads DATABASE_URL + SOR settings from .env via tsx --env-file-if-exists)
 
-import type { Pool } from "pg";
+import type { Pool } from "../db/pool.ts";
 import { getPool } from "../db/pool.ts";
 
+// SQLite stores timestamps as INTEGER unix ms; rows surface them as numbers.
 export interface RunAuditRecord {
 	run_id: string;
 	event: {
@@ -21,8 +22,8 @@ export interface RunAuditRecord {
 		status: string;
 		log_url: string | null;
 		artifact_url: string | null;
-		created_at: Date;
-		completed_at: Date | null;
+		created_at: number;
+		completed_at: number | null;
 	};
 	classifications: Array<{
 		classification_id: string;
@@ -32,7 +33,7 @@ export interface RunAuditRecord {
 		classifier_version: string;
 		model: string | null;
 		summary: string | null;
-		created_at: Date;
+		created_at: number;
 	}>;
 	fix_attempts: Array<{
 		attempt_id: string;
@@ -42,7 +43,7 @@ export interface RunAuditRecord {
 		verification_result: string;
 		test_summary: string | null;
 		comment_url: string | null;
-		created_at: Date;
+		created_at: number;
 	}>;
 	escalations: Array<{
 		escalation_id: string;
@@ -50,7 +51,7 @@ export interface RunAuditRecord {
 		summary: string;
 		suggested_next_step: string;
 		comment_url: string | null;
-		created_at: Date;
+		created_at: number;
 	}>;
 }
 
@@ -59,8 +60,8 @@ export async function reconstructRun(
 	pool: Pool,
 	runId: string,
 ): Promise<RunAuditRecord> {
-	const runResult = await pool.query(
-		`SELECT external_run_id, repo, commit, branch, job_id, job_name, status,
+	const runResult = await pool.query<RunAuditRecord["event"]>(
+		`SELECT external_run_id, repo, "commit", branch, job_id, job_name, status,
 		        log_url, artifact_url, created_at, completed_at
 		 FROM ci_runs WHERE run_id = $1`,
 		[runId],
@@ -71,17 +72,17 @@ export async function reconstructRun(
 	}
 
 	const [classifications, fixAttempts, escalations] = await Promise.all([
-		pool.query(
+		pool.query<RunAuditRecord["classifications"][number]>(
 			`SELECT classification_id, category, confidence, evidence, classifier_version, model, summary, created_at
 			 FROM classifications WHERE run_id = $1 ORDER BY created_at ASC`,
 			[runId],
 		),
-		pool.query(
+		pool.query<RunAuditRecord["fix_attempts"][number]>(
 			`SELECT attempt_id, pattern_matched, diff, branch, verification_result, test_summary, comment_url, created_at
 			 FROM fix_attempts WHERE run_id = $1 ORDER BY created_at ASC`,
 			[runId],
 		),
-		pool.query(
+		pool.query<RunAuditRecord["escalations"][number]>(
 			`SELECT escalation_id, reason, summary, suggested_next_step, comment_url, created_at
 			 FROM escalations WHERE run_id = $1 ORDER BY created_at ASC`,
 			[runId],
@@ -117,7 +118,7 @@ export function renderRunAuditMarkdown(record: RunAuditRecord): string {
 		lines.push("## Classification(s)");
 		for (const c of record.classifications) {
 			lines.push(
-				`- **${c.category}** confidence ${c.confidence} (${c.classifier_version}, ${c.model ?? "rules-only"}) at ${c.created_at.toISOString()}`,
+				`- **${c.category}** confidence ${c.confidence} (${c.classifier_version}, ${c.model ?? "rules-only"}) at ${new Date(c.created_at).toISOString()}`,
 			);
 			if (c.summary) lines.push(`  - summary: ${c.summary}`);
 		}
@@ -128,7 +129,7 @@ export function renderRunAuditMarkdown(record: RunAuditRecord): string {
 		lines.push("## Fix attempt(s)");
 		for (const f of record.fix_attempts) {
 			lines.push(
-				`- pattern \`${f.pattern_matched}\` on \`${f.branch}\` → **${f.verification_result}** at ${f.created_at.toISOString()}`,
+				`- pattern \`${f.pattern_matched}\` on \`${f.branch}\` → **${f.verification_result}** at ${new Date(f.created_at).toISOString()}`,
 			);
 			if (f.comment_url) lines.push(`  - comment: ${f.comment_url}`);
 		}
@@ -138,7 +139,7 @@ export function renderRunAuditMarkdown(record: RunAuditRecord): string {
 	if (record.escalations.length > 0) {
 		lines.push("## Escalation(s)");
 		for (const e of record.escalations) {
-			lines.push(`- reason \`${e.reason}\` at ${e.created_at.toISOString()}`);
+			lines.push(`- reason \`${e.reason}\` at ${new Date(e.created_at).toISOString()}`);
 			lines.push(`  - summary: ${e.summary}`);
 			lines.push(`  - next step: ${e.suggested_next_step}`);
 			if (e.comment_url) lines.push(`  - comment: ${e.comment_url}`);

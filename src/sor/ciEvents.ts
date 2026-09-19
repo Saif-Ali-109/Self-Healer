@@ -1,6 +1,6 @@
-import type { Pool } from "pg";
-import { appendAuditEvent, ensureChain } from "../../fleet/src/db/audit.ts";
-import type { SorEvent } from "../../fleet/src/sor/events.ts";
+import type { Pool } from "../db/pool.ts";
+import { appendAuditEvent, ensureChain } from "./chain.ts";
+import type { SorEvent } from "./events.ts";
 
 const ACTOR = "self-healer";
 
@@ -17,7 +17,7 @@ async function ensureSorChain(pool: Pool): Promise<void> {
 }
 
 /**
- * Chain a CI event into the SOR hash-chain.
+ * Chain a CI event into the SOR hash-chain (SQLite).
  * Kind maps to payload.kind for reconstruction; event_type is always "phase".
  * NON-FATAL: failures warn and continue — never abort a pipeline over audit.
  */

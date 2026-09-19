@@ -66,11 +66,14 @@ describe.skipIf(!hasDb)("fix attempt persistence (one-attempt cap)", () => {
 			verificationResult: "passed",
 		});
 
-		const sor = await pool.query(
-			`SELECT payload FROM audit_events WHERE run_id = $1 AND payload->>'kind' = 'ci_fix_attempt'`,
+		const sor = await pool.query<{ payload: string }>(
+			`SELECT payload FROM audit_events WHERE run_id = $1 AND payload LIKE '%ci_fix_attempt%'`,
 			[runId],
 		);
 		expect(sor.rows.length).toBeGreaterThanOrEqual(1);
-		expect(sor.rows[0]?.payload?.pattern_matched).toBe("lint/format");
+		const payload = JSON.parse(sor.rows[0]!.payload) as {
+			pattern_matched?: string;
+		};
+		expect(payload.pattern_matched).toBe("lint/format");
 	});
 });

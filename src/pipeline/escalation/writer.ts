@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool } from "../../db/pool.ts";
 import { chainCiEvent } from "../../sor/ciEvents.ts";
 import type { EscalationReason, EscalationRecord } from "../../types.ts";
 import { postEscalationComment } from "../comments.ts";
@@ -66,7 +66,7 @@ export async function writeEscalation(
 
 	// Persist to escalations table (UNIQUE on run_id)
 	try {
-		const result = await pool.query(
+		const result = await pool.query<{ comment_url: string | null }>(
 			`INSERT INTO escalations (run_id, reason, summary, suggested_next_step, created_at)
        VALUES ($1, $2, $3, $4, now())
        ON CONFLICT (run_id) DO UPDATE SET

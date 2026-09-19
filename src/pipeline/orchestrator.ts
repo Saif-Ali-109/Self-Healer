@@ -5,12 +5,12 @@
 
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Pool } from "pg";
+import type { Pool } from "../db/pool.ts";
 import {
 	cleanupWorktree,
 	setupWorktree,
 	type WorktreeHandle,
-} from "../../fleet/src/git/worktree.ts";
+} from "./worktree.ts";
 import { getPool } from "../db/pool.ts";
 import { chainRunTransition } from "../sor/ciEvents.ts";
 import type {

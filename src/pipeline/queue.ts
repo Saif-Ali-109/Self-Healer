@@ -1,4 +1,4 @@
-import type { Pool, QueryResult } from "pg";
+import type { Pool, QueryResult } from "../db/pool.ts";
 import type { CiEvent, CiRunStatus } from "../types.ts";
 import { chainCiEvent } from "../sor/ciEvents.ts";
 
@@ -33,7 +33,7 @@ export class CiQueue {
 
 		try {
 			const result: QueryResult<{ run_id: string }> = await this.pool.query(
-				`INSERT INTO ci_runs (external_run_id, repo, commit, branch, job_id, job_name, status, log_url, artifact_url, created_at)
+				`INSERT INTO ci_runs (external_run_id, repo, "commit", branch, job_id, job_name, status, log_url, artifact_url, created_at)
 				 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, now())
 				 RETURNING run_id`,
 				[

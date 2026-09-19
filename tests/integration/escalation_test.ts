@@ -58,12 +58,13 @@ describe.skipIf(!hasDb)("escalation writer", () => {
 			summary: "Failure on main branch; manual review required.",
 		});
 
-		const sor = await pool.query(
-			`SELECT payload FROM audit_events WHERE run_id = $1 AND payload->>'kind' = 'ci_escalation'`,
+		const sor = await pool.query<{ payload: string }>(
+			`SELECT payload FROM audit_events WHERE run_id = $1 AND payload LIKE '%ci_escalation%'`,
 			[runId],
 		);
 		expect(sor.rows.length).toBeGreaterThanOrEqual(1);
-		expect(sor.rows[0]?.payload?.reason).toBe("critical_branch");
+		const payload = JSON.parse(sor.rows[0]!.payload) as { reason?: string };
+		expect(payload.reason).toBe("critical_branch");
 	});
 
 	it("upserts on repeated escalation for the same run (one row)", async () => {

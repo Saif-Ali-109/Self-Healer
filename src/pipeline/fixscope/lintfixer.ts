@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { WorktreeHandle } from "../../../fleet/src/git/worktree.ts";
+import type { WorktreeHandle } from "../worktree.ts";
 
 const exec = promisify(execFile);
 

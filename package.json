@@ -16,18 +16,15 @@
 		"format": "biome format --write",
 		"migrate:up": "tsx --env-file-if-exists=.env src/db/migrate.ts up",
 		"migrate:down": "tsx --env-file-if-exists=.env src/db/migrate.ts down",
-		"sor:verify": "tsx --env-file-if-exists=.env fleet/src/sor/verifyCli.ts",
+		"sor:verify": "tsx --env-file-if-exists=.env src/sor/verifyCli.ts",
 		"sor:amend": "tsx --env-file-if-exists=.env scripts/record-constitution-amendment.ts",
-		"sor:repair": "tsx --env-file-if-exists=.env fleet/src/sor/repairCli.ts",
+		"sor:repair": "tsx --env-file-if-exists=.env src/sor/repairCli.ts",
 		"audit:run": "tsx --env-file-if-exists=.env src/audit/reconstruct.ts"
 	},
-	"dependencies": {
-		"pg": "^8.23.0"
-	},
+	"dependencies": {},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.10",
 		"@types/node": "^22.10.0",
-		"@types/pg": "^8.21.0",
 		"tsx": "^4.19.2",
 		"typescript": "^5.7.2",
 		"vitest": "^3.0.0"

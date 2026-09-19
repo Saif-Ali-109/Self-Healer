@@ -1,26 +1,32 @@
-// Shared PostgreSQL pool — single instance, lazily created.
+// Shared database handle — single instance, lazily created.
+// Backed by node:sqlite (see ./sqlite.ts); keeps the Pool-shaped surface the
+// pipeline uses so call sites only change their type import.
 
-import type { Pool } from "pg";
-import pg from "pg";
+import type { Db, QueryResult, SqlRow } from "./sqlite.ts";
+import { closeDb, query as runQuery } from "./sqlite.ts";
 
-const { Pool: PgPool } = pg;
+export type Pool = Db;
+export type { QueryResult };
 
 let pool: Pool | null = null;
 
 export function getPool(): Pool {
 	if (pool) return pool;
-	const connectionString = process.env.DATABASE_URL;
-	if (!connectionString) {
-		throw new Error(
-			"DATABASE_URL is not set. Configure it in .env or export it before running.",
-		);
-	}
-	pool = new PgPool({ connectionString });
+	pool = {
+		query<T = SqlRow>(
+			text: string,
+			params: readonly unknown[] = [],
+		): Promise<QueryResult<T>> {
+			return runQuery<T>(text, params);
+		},
+		async end(): Promise<void> {
+			closeDb();
+		},
+	};
 	return pool;
 }
 
 export async function closePool(): Promise<void> {
-	if (!pool) return;
-	await pool.end();
+	closeDb();
 	pool = null;
 }

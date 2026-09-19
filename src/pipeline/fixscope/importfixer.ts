@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
-import type { WorktreeHandle } from "../../../fleet/src/git/worktree.ts";
+import type { WorktreeHandle } from "../worktree.ts";
 
 const exec = promisify(execFile);
 

@@ -1,12 +1,13 @@
 // Test helpers — resolve env from process.env, falling back to a local `.env`
 // file (loaded only for tests; never committed). DB-gated suites skip when no
 // DATABASE_URL is available so `npm test` works in CI without a database.
+// DATABASE_URL points at the SQLite database file; the schema auto-migrates
+// on first open (idempotent).
 
 import { existsSync, readFileSync } from "node:fs";
-import type { Pool } from "pg";
-import pg from "pg";
-
-const { Pool: PgPool } = pg;
+import type { Pool } from "../../src/db/pool.ts";
+import { getPool } from "../../src/db/pool.ts";
+import { migrateUp } from "../../src/db/migrate.ts";
 
 export function readDotenv(key: string): string | undefined {
 	if (process.env[key]) return process.env[key];
@@ -49,13 +50,21 @@ export const SOR_SIGNING_KEY = readDotenv("SOR_SIGNING_KEY");
 export const hasDb = Boolean(DATABASE_URL);
 
 let pool: Pool | null = null;
+let migrated = false;
 
-/** Test pool — only valid when hasDb. */
+/** Test pool — only valid when hasDb. Schema auto-migrates on first open. */
 export function getTestPool(): Pool {
 	if (!DATABASE_URL) {
 		throw new Error("DATABASE_URL is not available; cannot open test pool");
 	}
-	if (!pool) pool = new PgPool({ connectionString: DATABASE_URL });
+	if (!pool) {
+		process.env.DATABASE_URL = DATABASE_URL;
+		if (!migrated) {
+			migrateUp();
+			migrated = true;
+		}
+		pool = getPool();
+	}
 	return pool;
 }
 
@@ -72,7 +81,7 @@ export async function insertCiRun(
 	overrides: Record<string, unknown> = {},
 ): Promise<string> {
 	const result = await pool.query<{ run_id: string }>(
-		`INSERT INTO ci_runs (external_run_id, repo, commit, branch, job_id, job_name, status, log_url, created_at)
+		`INSERT INTO ci_runs (external_run_id, repo, "commit", branch, job_id, job_name, status, log_url, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 		 RETURNING run_id`,
 		[

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Pool } from "pg";
+import type { Pool } from "../../db/pool.ts";
 import { chainCiEvent } from "../../sor/ciEvents.ts";
 import { MAX_RERUNS } from "../../types.ts";
 import { postFlakyResolvedComment } from "../comments.ts";
