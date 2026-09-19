@@ -43,12 +43,13 @@ switch (command) {
 		const flagIdx = args.findIndex(
 			(a) => a === "--repo" || a.startsWith("--repo="),
 		);
+		const flag = flagIdx >= 0 ? args[flagIdx] : undefined;
 		const repo =
-			flagIdx >= 0
-				? args[flagIdx].startsWith("--repo=")
-					? args[flagIdx].slice("--repo=".length)
-					: args[flagIdx + 1]
-				: undefined;
+			flag === undefined
+				? undefined
+				: flag.startsWith("--repo=")
+					? flag.slice("--repo=".length)
+					: args[flagIdx! + 1];
 		if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
 			fail("usage: self-healer enable --repo owner/repo");
 		}
