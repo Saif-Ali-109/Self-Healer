@@ -22,7 +22,7 @@ description: "Task list template for feature implementation"
 ## Path Conventions
 
 - **Single project**: `src/`, `tests/`, `migrations/` at repository root (Self-Healer repo)
-- Fleet modules are imported from the local `fleet/` clone via path alias (dev-time dependency, gitignored)
+- Self-Healer is standalone — all logic implemented directly. `node:sqlite` (built-in) for storage, direct `git worktree` shell calls for isolated fixes. No Fleet clone dependency.
 
 ---
 
@@ -31,8 +31,8 @@ description: "Task list template for feature implementation"
 **Purpose**: Project initialization and basic structure
 
 - [X] T001 Create repo scaffolding per plan.md: `src/webhook/`, `src/pipeline/{classifier,fixscope,retry,escalation}/`, `src/db/`, `src/sor/`, `src/utils/`, `tests/{unit,integration,fixtures}/`, `tests/fixtures/`
-- [X] T002 Initialize TypeScript project: `package.json` (`"type": "module"`, engines `node >=22`), `tsconfig.json` (strict ESM, `noEmit`), and path alias wiring the local `fleet/` clone for imports
-- [X] T003 [P] Configure lint/format tooling: `biome.json` + `lint`/`format` npm scripts mirroring Fleet's config
+- [X] T002 Initialize TypeScript project: `package.json` (`"type": "module"`, engines `node >=22`), `tsconfig.json` (strict ESM, `noEmit`), no path alias needed (standalone)
+- [X] T003 [P] Configure lint/format tooling: `biome.json` + `lint`/`format` npm scripts
 - [X] T004 [P] Create `.env.example` documenting `GH_TOKEN`, `CI_WEBHOOK_SECRET`, `DATABASE_URL`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`; extend `.gitignore` for `.env` (never committed)
 - [X] T005 Add npm scripts to `package.json`: `start`, `typecheck`, `test`, `migrate:up`, `sor:verify`
 
@@ -52,7 +52,7 @@ description: "Task list template for feature implementation"
 - [X] T011 Implement env/secret loader `src/config.ts` — validate required vars at startup and fail loudly if missing; never log secret values
 - [X] T012 Define canonical normalized CI event type + response-code contract in `src/types.ts` per contracts/webhook-ci.md
 - [X] T013 Implement shared CI comment client `src/pipeline/comments.ts` — posts to a CI run via the `gh` api wrapper, redacts secret patterns, formats the 3 comment types from contracts/ci-comment.md
-- [X] T014 Implement SOR chaining helper `src/sor/ciEvents.ts` — chains `classifications`/`fix_attempts`/`escalations` inserts and `ci_runs` status transitions through Fleet's SOR ingest
+- [X] T014 Implement SOR chaining helper `src/sor/ciEvents.ts` — chains `classifications`/`fix_attempts`/`escalations` inserts and `ci_runs` status transitions through the SQLite SOR hash chain
 - [X] T015 Implement budget tracker `src/utils/budget.ts` — hard 3-call LLM cap + 10-minute pipeline timer; on exhaustion signal escalation with partial evidence
 
 **Checkpoint**: Foundation ready — user story implementation can now begin
@@ -76,11 +76,11 @@ description: "Task list template for feature implementation"
 
 - [X] T018 [P] [US1] Implement normalization `src/webhook/normalize.ts` — validate payload, build canonical event, compute dedupe key (`external_run_id`+`repo`+`job_id`)
 - [X] T019 [US1] Implement GitHub Actions adapter `src/webhook/adapters/github.ts` mapping `workflow_job` payload → canonical event (contracts/webhook-ci.md)
-- [X] T020 [US1] Implement webhook endpoint `src/webhook/server.ts` — `POST /api/webhook/ci`, HMAC-verify `X-Webhook-Secret`, return `202/400/401/409`. Implemented as a standalone `node:http` server on `CI_WEBHOOK_PORT` (contract path would collide with Fleet's `/webhook` dashboard route); `handleCiWebhook` stays mountable via Fleet's `ApiHandlers` interface
+- [X] T020 [US1] Implement webhook endpoint `src/webhook/server.ts` — `POST /api/webhook/ci`, HMAC-verify `X-Webhook-Secret`, return `202/400/401/409`. Implemented as a standalone `node:http` server on `CI_WEBHOOK_PORT`; `handleCiWebhook` stays mountable via the `ApiHandlers` interface
 - [X] T021 Implement FIFO queue + dedupe `src/pipeline/queue.ts` (single worker; rejects duplicate events)
 - [X] T022 [P] [US1] Implement classifier signals `src/pipeline/classifier/signals.ts` — flaky + infra rule lists (contracts/classification.md)
 - [X] T023 [US1] Implement classifier `src/pipeline/classifier/index.ts` — rule-first category + confidence (≥ 0.7 threshold), evidence capture, persist to `classifications` and chain to SOR (T014)
-- [X] T024 [US1] Implement orchestrator intake `src/pipeline/orchestrator.ts` — deploy → queue → open worktree at failing commit (reuse `fleet/src/git/worktree.ts`) → classify → route flaky/real_bug/infra
+- [X] T024 [US1] Implement orchestrator intake `src/pipeline/orchestrator.ts` — deploy → queue → open worktree at failing commit (direct `git worktree` shell calls) → classify → route flaky/real_bug/infra
 
 **Checkpoint**: User Story 1 fully functional and testable independently
 
@@ -181,7 +181,7 @@ description: "Task list template for feature implementation"
 - [X] T041 [P] Run full quickstart.md validation (scenarios A–G) and fix any gaps found — DB-backed scenarios validated (A-partial, B-partial, C, D, F): webhook contract, classification persistence, one-attempt cap, escalation, SOR verify + tamper detection; live-GitHub steps (worktree push, rerun/comment) deferred to a token-equipped environment (see README "Validation status")
 - [X] T042 [P] Security hardening: timing-safe HMAC compare, secret-redaction tests for comments/logs, confirm zero secrets in fixtures
 - [X] T043 [P] Documentation: README usage + finalize `.env.example`
-- [X] T044 Commit hygiene check: confirm `fleet/`, `.opencode/`, `.env` stay untracked; only `src/`, `specs/`, `.specify/` committed and pushed
+- [X] T044 Commit hygiene check: confirm `.env` stays untracked; only `src/`, `specs/`, `.specify/` committed and pushed
 
 ---
 
@@ -283,4 +283,4 @@ With multiple developers:
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
 - **Parallel rule (constitution 1.1.0)**: subagents may run `[P]` tasks in parallel only when they touch different files; never let two agents edit the same file simultaneously — serialize or merge same-file work.
-- Fleet is a dev-time dependency: only Self-Healer source + `specs/` + `.specify/` are committed; `fleet/`, `.opencode/`, `.env` stay gitignored
+- Self-Healer is standalone — all source + `specs/` + `.specify/` are committed; `.env`, `.runs`, `node_modules` stay gitignored; no Fleet clone needed

@@ -1,12 +1,17 @@
 # Self-Healer CI Agent
 
-> CI failure agent that classifies failures (`flaky` / `real_bug` / `infra`), retries flaky
-> runs up to 3×, auto-fixes allowlisted bugs on a `ci-fix/<run-id>` branch with a CI comment,
-> never auto-PRs or merges, and logs every decision in a tamper-evident SOR audit trail.
+> A CI failure agent that classifies every failure (`flaky` / `real_bug` / `infra`), retries
+> flaky runs up to 3×, auto-fixes allowlisted bugs on a `ci-fix/<run-id>` branch, opens a
+> **fix-only pull request for human approval** (the robot never merges), and logs every
+> decision in a tamper-evident SOR audit chain.
 
 Built on the local [Fleet](https://github.com/Saif-Ali-109/Self-Healer/tree/main/fleet) clone
-(read-only dependency — Self-Healer reuses Fleet's SOR chain, git worktrees, and web dashboard
+(read-only dependency — Self-Healer reuses Fleet's SOR chain, git worktrees, and migration
 schema; Fleet source is never modified).
+
+Governed by the project [Constitution v1.2.0](.specify/memory/constitution.md), which caps the
+agent's autonomy: ≤ 3 LLM calls per failure, ≤ 3 flaky reruns, ≥ 0.7 confidence to fix, a
+10-minute budget per run, a single FIFO worker, and branch + comment delivery only.
 
 ---
 
@@ -14,7 +19,7 @@ schema; Fleet source is never modified).
 
 ```
 GitHub Actions webhook  ──▶  POST /api/webhook/ci   (HMAC-verified)
-        │  normalize + dedupe (external_run_id + repo + job_id)
+        │   normalize + dedupe (external_run_id + repo + job_id)
         ▼
    ci_runs (pending)  ──▶  FIFO single worker (FOR UPDATE SKIP LOCKED)
         │
@@ -22,30 +27,100 @@ GitHub Actions webhook  ──▶  POST /api/webhook/ci   (HMAC-verified)
    worktree at failing commit  ──▶  classify (rule-first: flaky / infra / real_bug ≥ 0.7)
         │
         ├── flaky      ──▶  rerun ≤ 3× via `gh api` → resolved + comment  |  escalate (flaky_retries_exhausted)
-        ├── real_bug   ──▶  allowlist (MVP: lint/format) → 1 fix on ci-fix/<run-id> → verify → comment | escalate
+        ├── real_bug   ──▶  allowlist pattern match → apply fix → verify in worktree
+        │                  →  open ci-fix/<run-id> fix PR → human approves & merges  |  escalate
         └── infra      ──▶  escalate (infra)
 ```
 
-Constitution guardrails enforced: ≤ 3 LLM calls and 10-minute budget per run, ≥ 0.7
-confidence to fix, one fix attempt per run (DB unique), protected branches never touched
-(`main` / `release/*` / `v*`), 5+ file diffs escalate, branch + comment delivery only.
+Every decision — classification, retry, fix attempt, escalation — is appended to Fleet's
+append-only SOR hash chain (`npm run sor:verify` proves tamper-freeness, `npm run audit:run`
+reconstructs a single run end-to-end).
+
+---
+
+## Constitution guardrails (v1.2.0)
+
+| Guardrail | Enforcement |
+|-----------|-------------|
+| Classification is rule-augmented, evidence recorded | regex signals + confidence in SOR, never silent |
+| Only allowlisted patterns are auto-fixed | anything else escalates (`no_pattern_match`) |
+| ≤ 3 LLM calls / failure | `PipelineBudget` + constants; LLM is optional enrichment |
+| ≤ 3 flaky reruns | `MAX_RERUNS` hard cap |
+| ≥ 0.7 confidence to fix | classifier thresholds |
+| One fix attempt per run | DB unique `uq_fix_attempts_run` |
+| Never touch protected branches | `main` / `release/*` / `v*` are never auto-fixed |
+| Never edit CI definition files | e.g. `.github/workflows/*` are out of fix scope |
+| Robot never merges | fixes ship as PRs; a human reviews and merges |
+| Tamper-evident audit | SOR hash chain + append-only DB trigger |
+
+Webhooks from the agent's own `ci-fix/*` branches are ignored, and only repositories that
+carry the `self-healer-notify.yml` workflow trigger the daemon — so the agent can never loop
+on its own output.
+
+---
+
+## Fix patterns
+
+The fix-scope allowlist (`src/pipeline/fixscope/allowlist.ts`) ships **two active patterns**
+and two post-MVP stubs:
+
+| Pattern | Detection | Fix | Verification |
+|---------|-----------|-----|--------------|
+| `lint/format` | biome / eslint / prettier diagnostics | auto-format the offending file(s) | `npx @biomejs/biome check .` |
+| `import/type` | `ReferenceError: X is not defined` | add the single import line for `X`, sourced from the sole exporter file | `node src/main.mjs` (repo convention) |
+| `snapshot` | — (stub, post-MVP) | — | — |
+| `timeout` | — (stub, post-MVP) | — | — |
+
+Each pattern's `verifyCommand` is **executed in the worktree after the fix**; exit 0 proves
+the fix. The same command is echoed in the fix comment and PR body. The `import/type` fixer
+is deliberately conservative:
+
+- **Detection**: `ReferenceError: X is not defined` only, extracted from the failing job log.
+- **Failing-file derivation**: stack-frame candidates from the log are validated against the
+  worktree — the file must exist, reference the symbol, and appear in a real stack frame.
+  Log noise (rescue-block echoes, doc comments that merely *mention* "import") is stripped
+  before the exclusion check.
+- **ESM-only**: `.mjs`/`.cjs`/`package.json` `type`/syntax sniffing — CommonJS targets bail
+  cleanly instead of guessing.
+- **Deterministic**: the import specifier is the on-disk relative path with extension; the
+  exporter must be unambiguous (a single candidate), else the fix bails.
+
+Anything without an allowlisted pattern escalates with a suggested next step — the agent
+never guesses.
+
+---
+
+## Delivery: approve-then-fix
+
+1. A failing job matches an allowlisted pattern.
+2. The agent applies exactly one fix in a worktree at the failing commit and verifies it.
+3. The fix is pushed to `ci-fix/<run-id>` (based on the *failing* branch) and surfaced as a
+   **fix-only pull request** titled `🤖 Self-Healer: auto-fix for CI run #<run-id>`.
+4. A comment is posted on the failing PR/run with root cause, pattern, diff summary,
+   verification output, and the fix-PR link.
+5. **A human reviews and merges.** The agent never merges — not even its own PRs — and
+   `ci-fix/*` webhook events are dropped so the agent never reacts to its own branches.
+
+---
 
 ## Quick start
 
 ```bash
 cp .env.example .env            # fill in REAL values (never commit .env)
 npm install
-npm run migrate:up              # applies Fleet 001–016 + Self-Healer 017–020
-npm run start                   # webhook listener + single-worker daemon
+npm run migrate:up              # applies Fleet 001–016 + Self-Healer 017–022
+npm start                       # webhook listener + single-worker daemon
 ```
 
 Webhook endpoint: `POST /api/webhook/ci` on `CI_WEBHOOK_PORT` (default `3457`).
+
+### Webhook contract
 
 The handler validates an `X-Webhook-Secret` HMAC-SHA256 header and returns:
 
 | Code | Meaning |
 |------|---------|
-| `202` | Accepted, `ci_runs` row created (idempotent response) |
+| `202` | Accepted, `ci_runs` row created (idempotent response; `ci-fix/*` events → skipped) |
 | `400` | Non-failure event / invalid JSON / wrong event type |
 | `401` | Missing or invalid webhook secret |
 | `409` | Duplicate event (unique `external_run_id + repo + job_id`) |
@@ -62,6 +137,8 @@ node --input-type=module -e '
 '
 ```
 
+---
+
 ## Configuration
 
 All secrets live in `.env` (gitignored). Required:
@@ -70,13 +147,15 @@ All secrets live in `.env` (gitignored). Required:
 |----------|---------|
 | `GH_TOKEN` | `gh` CLI auth: rerun jobs, post CI comments, push `ci-fix/*` branches |
 | `CI_WEBHOOK_SECRET` | HMAC secret for `X-Webhook-Secret` header verification |
-| `DATABASE_URL` | PostgreSQL connection string (Fleet schema 001–016 + Self-Healer 017–020) |
+| `DATABASE_URL` | PostgreSQL connection string (Fleet schema 001–016 + Self-Healer 017–022) |
 | `SOR_SIGNING_KEY` | Key that signs the SOR audit chain (same as Fleet) |
 
 Optional: `SOR_KEY_ID` (default `v1`), `CI_WEBHOOK_PORT` (default `3457`),
-`GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL` (classifier enrichment is
-rule-first; LLM keys enable optional model confirmation), `CI_POST_COMMENTS=0` (dry-run:
-skip posting CI comments — used by tests; default is posting enabled).
+`GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL` (classifier enrichment — the
+core loop is rule-first and never requires an LLM), `CI_POST_COMMENTS=0` (dry-run: skip
+posting CI comments — used by tests).
+
+---
 
 ## Commands
 
@@ -84,69 +163,85 @@ skip posting CI comments — used by tests; default is posting enabled).
 |---------|---------|
 | `npm start` | Run webhook listener + worker daemon |
 | `npm run typecheck` | TypeScript strict check |
-| `npm test` | Unit + integration tests (integration suites auto-skip without `DATABASE_URL`) |
+| `npm test` | Unit + integration tests (DB-gated suites skip without `DATABASE_URL`) |
 | `npm run lint` / `npm run format` | Biome lint / format |
 | `npm run migrate:up` / `migrate:down` | Apply / roll back migrations |
 | `npm run sor:verify` | Replay-verify the SOR hash chain (`ok: yes` = tamper-free) |
 | `npm run sor:repair` | Re-sign the chain under the current key (key-loss recovery only) |
 | `npm run audit:run -- <run-id>` | Reconstruct what the agent saw/decided for a run |
 
-### Audit reconstruction (US5)
+### Audit reconstruction
 
-Every pipeline decision is chained into Fleet's append-only SOR hash chain. To audit a run:
+Every pipeline decision is chained into Fleet's append-only SOR hash chain:
 
 ```bash
 npm run audit:run -- <run-id>     # human-readable markdown from the 4 CI tables
 npm run sor:verify                # chain integrity: detects any tampered record
 ```
 
-Example record: a `ci_runs` event shows what the agent saw (repo, commit, branch, job
-logs); `classifications` captures category + confidence + evidence; `fix_attempts` records
-the one permitted attempt (diff, branch, verification result, comment URL); `escalations`
-captures the reason + suggested next step. The SOR chain binds them all in order; any
-modification is detected by `sor:verify` (an append-only DB trigger blocks in-app UPDATEs
-as defense-in-depth).
+A `ci_runs` event records what the agent saw (repo, commit, branch, job logs);
+`classifications` captures category + confidence + evidence; `fix_attempts` records the one
+permitted attempt (diff, branch, verification result, fix PR URL); `escalations` captures
+the reason + suggested next step. The SOR chain binds them in order; an append-only DB
+trigger blocks in-app UPDATEs as defense-in-depth.
+
+---
+
+## Repository layout
+
+```
+src/
+  webhook/          HMAC-verified webhook server + GitHub Actions adapter
+  pipeline/
+    queue.ts        FIFO worker queue (FOR UPDATE SKIP LOCKED)
+    orchestrator.ts classification → pattern-matched fix / retry / escalation dispatch
+    classifier/     rule-first flaky / infra / real_bug (LLM optional)
+    retry/          flaky rerun budget
+    fixscope/       allowlist + lintfixer + importfixer (pure detection layers + shell drivers)
+    escalation/     reasons → suggested next steps, DB + SOR chaining
+  audit/            run reconstruction for auditing
+  db/               pool + migration runner (Fleet 001–016 + Self-Healer 017–022)
+fleet/              read-only local clone (SOR chain, worktrees, 001–016 migrations)
+specs/001-self-healer-ci-agent/
+  constitution→     .specify/memory/constitution.md (v1.2.0, the governing contract)
+  plan.md / contracts/ / tasks.md / checklists/
+tests/              unit + integration suites
+```
+
+---
+
+## Live demo evidence
+
+Verified end-to-end against a real GitHub repo (`Saif-Ali-109/demo-repo`) with the agent
+running on its own daemon:
+
+| Job | Failure | Agent outcome | Result |
+|-----|---------|---------------|--------|
+| `lint` | formatting error in `src/widget.js` | auto-fix → **PR #33** (`ci-fix/…`), opened for review | merged by human → job passes |
+| `import` | `ReferenceError: renderWidget is not defined` | auto-fix → **PR #34**, verified with `node src/main.mjs` (exit 0) | merged by human → job passes |
+| `flaky` | hardcoded intermittent failure | 3 reruns → escalate `flaky_retries_exhausted` | comment posted, by design |
+| `unknown` | hardcoded demo error | no allowlisted pattern → escalate `no_pattern_match` | comment posted, by design |
+
+The demo also proved: one clean handling cycle per failure (exactly one comment + one PR per
+run), no duplicate comments, no comments on `ci-fix/*` PRs, and pattern-aware root-cause
+lines in fix comments (`**Pattern matched**: import/type`).
+
+---
 
 ## Validation status
 
-Implemented and verified in this environment (PostgreSQL 16, local DB, tests green —
-`npm test` 50/50, `sor:verify` ok):
+- **Tests**: 88 passing (`npm test`) comprising unit tests for classifier, retry budget,
+  fix scope, fixer detection, escalation, comments, security, webhook contract, plus DB-gated
+  integration suites (SOR chaining, tamper-recovery, audit reconstruction). DB-gated suites
+  use `DATABASE_URL` from the environment or a local `.env` and skip cleanly when absent.
+- **Typecheck**: `npm run typecheck` (tsc strict) clean.
+- **SOR**: `npm run sor:verify` reports a tamper-free chain; tamper simulation is detected
+  and recovers after restore.
+- **Live**: webhook → worktree → classify → fix → verify → fix PR → human merge cycle and
+  the flaky-rerun → escalate and no-pattern → escalate cycles all observed against live
+  GitHub Actions runs.
 
-- Webhook contract: valid payload → `202` + `ci_runs` row; wrong/missing secret → `401`;
-  duplicate → `409`; non-failure / wrong event type / invalid JSON → `400`.
-- Classifier: flaky + infra signal rules, confidence scoring (strong 0.9 / moderate 0.75),
-  empty-log → `real_bug`.
-- Retry budget: hard caps (3 reruns, 3 LLM calls, 10 min) enforced by `PipelineBudget` +
-  constants; rerun loop caps at `MAX_RERUNS`.
-- Fix scope: allowlist ships `lint/format` active (3 post-MVP stubs inert), one-attempt cap
-  enforced by `uq_fix_attempts_run`, `ci-fix/<run-id>` branch naming.
-- Escalation: all 9 reasons → suggested next step; DB persistence + SOR chaining.
-- SOR: CI events chain into `audit_events`, `sor:verify` passes; tamper simulation
-  (appending to a payload) is detected and recovers after restore.
-
-Deferred to a live environment (needs a real GitHub token + actions runner):
-
-- Push a real failing commit → observe the worktree push to `ci-fix/<run-id>` on origin.
-- Flaky rerun + flaky-resolved comment against a live GitHub Actions run.
-- Lint/format fix + fix-delivered comment against a live repo.
-- Escalation comment posts (comment URLs are null without a live run).
-
-## Implementation notes
-
-- **Standalone webhook server, not mounted on Fleet's dashboard.** The contract path
-  `POST /api/webhook/ci` would collide with Fleet's own dashboard route (`/webhook`), so
-  Self-Healer runs its own `node:http` server on `CI_WEBHOOK_PORT`. `handleCiWebhook` is
-  exported as a pure `(headers, rawBody) → { status, body }` function, so it can be mounted
-  on Fleet's dashboard via its `ApiHandlers` interface without refactoring if desired.
-- **Imports into Fleet, never out of it.** Self-Healer imports Fleet's SOR chain
-  (`appendAuditEvent`, `ensureChain`, `verifyChain`) and git worktrees
-  (`setupWorktree`/`cleanupWorktree`) via relative paths; Fleet stays unmodified and
-  gitignored. Self-Healer installs its own `pg` to satisfy Fleet's transitive imports.
-- **MVP allowlist = `lint/format` only** (contracts/fix-attempt.md). Snapshot-test and
-  dependency-update patterns ship as inert registry stubs, activated post-MVP.
-- **LLM usage is optional.** The classifier is rule-first (regex signals); LLM providers
-  are configured for enrichment but never required for the core loop, keeping the
-  constitution's 3-call cap trivially satisfiable.
+---
 
 ## Development
 
@@ -158,10 +253,12 @@ npm run format
 npm run sor:verify
 ```
 
-DB-backed integration tests read `DATABASE_URL` (and `SOR_SIGNING_KEY`) from the
-environment, falling back to a local `.env`; without them the suites skip cleanly.
+New fix patterns follow the Constitution's own §Development Workflow: shipped **one at a
+time**, each with a pure detection layer, unit tests, an integration fixture, and a contract
+update in `specs/001-self-healer-ci-agent/contracts/` — no constitution version bump, no SOR
+amendment.
 
 ## Architecture
 
-See `specs/001-self-healer-ci-agent/plan.md` for the full technical design, and the
-task checklist in `specs/001-self-healer-ci-agent/tasks.md`.
+See `specs/001-self-healer-ci-agent/plan.md` for the full technical design, and the task
+checklist in `specs/001-self-healer-ci-agent/tasks.md`.

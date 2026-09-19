@@ -2,19 +2,19 @@
 
 **Branch**: `001-self-healer-ci-agent` | **Date**: 2026-09-13 | **Plan**: [plan.md](plan.md)
 
-Phase 0 output — resolves every unknown from the plan's Technical Context with decisions, rationale, and alternatives considered.
+Phase 0 output — resolves every unknown from the plan's Technical Context with decisions, rationale, and alternatives considered. Updated for standalone architecture (no Fleet, no PostgreSQL).
 
-## 1. Dependency strategy: how Self-Healer reuses Fleet
+## 1. Dependency strategy: standalone
 
-- **Decision**: Self-Healer is a standalone TypeScript repo whose `src/` imports Fleet modules from the local `fleet/` clone via a path alias (dev-time dependency). The `fleet/` clone is gitignored and never pushed to GitHub; only Self-Healer's own source + `specs/` + `.specify/` are committed.
-- **Rationale**: The constitution's Development Workflow says "reuse from Fleet, do not rebuild" — orchestrator, worker runtime, provider registry, tools, SOR hash-chain, dashboard/SSE/TUI, and MCP pattern. Importing from the sibling clone makes every reuse literal (single copy of the code) and keeps the Self-Healer GitHub repo clean (only net-new + docs).
-- **Alternatives considered**: (a) vendoring Fleet's source into Self-Healer — rejected: duplicates the codebase, breaks the dependency relationship, and bloats the repo; (b) npm-packaging Fleet as a library — rejected: Fleet is a private, unbuilt project with no publish step; (c) making Self-Healer an in-place overlay inside the fleet clone — rejected: the fleet clone is upstream-owned and we must not diverge it.
+- **Decision**: Self-Healer is a self-contained TypeScript repo with no external runtime dependencies beyond Node 22+ built-ins (`node:sqlite`, `node:child_process`, `node:fs`, `node:http`, `node:path`, `node:url`). No Fleet clone.
+- **Rationale**: The constitution's Development Workflow (v1.3.0) says build standalone — orchestrator, worker runtime, provider registry, tools, SOR hash-chain, and git worktree calls are all implemented directly. This removes the Fleet clone as a prerequisite and makes the package self-installable.
+- **Alternatives considered**: (a) keep Fleet clone as dev dependency — rejected: adds a prerequisite that blocks standalone distribution; (b) vendor Fleet's source — rejected: Fleet is upstream-owned and not versioned for this use; (c) npm-packaging Fleet — rejected: Fleet is a private, unbuilt project.
 
 ## 2. Webhook listener hosting
 
-- **Decision**: Host the CI webhook endpoint on Fleet's existing dashboard HTTP server, using the `WebhookHandler` type already defined in `src/dashboard/api.ts` (with `WEBHOOK_MAX_BYTES = 256 KB` payload cap).
-- **Rationale**: Fleet's dashboard server is a zero-runtime-dependency Node http server already running in the daemon; there is a ready-made webhook dispatch shape. No new HTTP framework or process needed.
-- **Alternatives considered**: (a) standalone Express/Fastify listener — rejected: adds a dependency and a second server; (b) separate process — rejected: complicates lifecycle, secrets, and single-worker guarantee.
+- **Decision**: Standalone `node:http` server on `CI_WEBHOOK_PORT` (default `3457`). The `handleCiWebhook` function is exported as a pure `(headers, rawBody) → { status, body }` function, so it can be mounted on another server if desired.
+- **Rationale**: A standalone server keeps Self-Healer independent — no dashboard server dependency, no Fleet process to manage. The pure-function export keeps the door open for mounting on Fleet's dashboard later if a user wants that.
+- **Alternatives considered**: (a) Fleet's dashboard server — rejected: adds Fleet as a hard prerequisite; (b) Express/Fastify — rejected: adds a dependency; standalone `node:http` is sufficient.
 
 ## 3. CI payload adapter (GitHub Actions first)
 
@@ -36,37 +36,37 @@ Phase 0 output — resolves every unknown from the plan's Technical Context with
 
 ## 6. Fix-scope guardrail and MVP pattern
 
-- **Decision**: `allowlist.ts` implements the four patterns from the spec/constitution (outdated snapshot/golden file, single-line import/type fix, low timeout, lint/format), but MVP ships **only the lint/format pattern** wired end-to-end. The other three are added one at a time, each with its own verification, per constitution.
-- **Rationale**: Constitution Development Workflow explicitly scopes MVP to lint/format-only; each additional pattern needs its own validator + tests. Keep this tight.
-- **Alternatives considered**: shipping all four patterns in MVP — rejected: contradicts constitution's phased MVP definition and increases unvalidated-fix risk.
+- **Decision**: `allowlist.ts` implements the four patterns from the spec/constitution (outdated snapshot/golden file, single-line import/type fix, low timeout, lint/format). MVP ships `lint/format` and `import/type` wired end-to-end. Additional patterns are added one at a time, each with its own verification, per constitution.
+- **Rationale**: Constitution Development Workflow explicitly scopes patterns to one-at-a-time; each needs its own validator + tests. Keep this tight.
+- **Alternatives considered**: shipping all patterns in MVP — rejected: contradicts constitution's phased approach and increases unvalidated-fix risk.
 
 ## 7. Retry runner (flaky path)
 
-- **Decision**: Retry runner reruns the failed job via the `gh api` wrapper (Fleet's `gh.ts` pattern) using the platform's rerun endpoint, max 3 reruns. Still failing → escalate with rerun evidence.
+- **Decision**: Retry runner reruns the failed job via `gh api` using the GitHub Actions rerun endpoint, max 3 reruns. Still failing → escalate with rerun evidence.
 - **Rationale**: Constitution Delivery: up to 3 reruns for flaky; using the platform's own rerun API is the only correct way to re-execute a job (locally re-running tests would not reproduce the CI environment).
 - **Alternatives considered**: local re-run of the test command in a worktree — rejected: doesn't exercise the real CI environment; misleading results.
 
 ## 8. Delivery and escalation channels
 
-- **Decision**: Fix delivery pushes to a reusable `ci-fix`-style branch per repository (`ci-fix/<run-id>`), then comments on the CI run via `gh api` with root cause, branch name, diff summary, test results. Escalations comment on the CI run with root cause + suggested next step. No PRs, no merges.
-- **Rationale**: Constitution principle V. Comments on the run keep context with the failure; branch-per-repo reusability avoids branch explosion.
+- **Decision**: Fix delivery pushes to a reusable `ci-fix`-style branch per repository (`ci-fix/<run-id>`), opens a **fix-only PR** for human review, and comments on the CI run via `gh api` with root cause, branch name, diff summary, test results, and PR link. Escalations comment on the CI run with root cause + suggested next step. The robot never merges.
+- **Rationale**: Constitution principle V (v1.2.0). Fix-only PRs put the change in front of a human without giving the agent merge power. Comments on the run keep context with the failure.
 - **Alternatives considered**: opening PRs/auto-merge — rejected (constitution NON-NEGOTIABLE); posting to issues — rejected: separates context from the failing run.
 
 ## 9. Storage and SOR integration
 
-- **Decision**: New migrations `017_ci_runs`, `018_classifications`, `019_fix_attempts`, `020_escalations` extend Fleet's Postgres schema; every row's decisions are additionally mirrored through Fleet's SOR `ingest` so the tamper-evident hash-chain covers CI events just like issue events.
-- **Rationale**: Constitution Operating Constraints — Postgres persistence and SOR hash-chain, reusing Fleet's schema pattern (see `migrations/001`/`004`).
-- **Alternatives considered**: separate audit store — rejected: must share the same chain as Fleet's tables (constitution: "chained into the same SOR hash-chain").
+- **Decision**: `node:sqlite` (built into Node 22+, zero extra dependencies) stores `ci_runs`, `classifications`, `fix_attempts`, `escalations`, and an append-only `audit_events` table forming the SOR hash chain. Migrations 001–022 applied to the SQLite database. SOR hash chain implemented directly in SQLite — no external database server and no Fleet dependency.
+- **Rationale**: Constitution Operating Constraints — a single-file database is sufficient for the scale and removes the PostgreSQL prerequisite. The append-only hash chain provides tamper-evidence without Postgres triggers.
+- **Alternatives considered**: (a) PostgreSQL — rejected: requires a running server; adds a prerequisite; (b) JSON files — rejected: no ACID, poor concurrency, hard to query; (c) Redis — rejected: overkill at single-worker scale; not a durable audit store.
 
 ## 10. Cache/Prior knowledge for flaky detection
 
-- **Decision**: Flaky signal "passed on a previous run of same commit/branch" reads `ci_runs` history (status of prior runs for the same commit) plus a `flaky_history` lookup on the `classifications` table. No separate cache service.
-- **Rationale**: The Postgres tables already carry the needed history; an extra cache is unneeded complexity.
-- **Alternatives considered**: Redis/TTL cache — rejected: overkill at single-worker scale; history lives in Postgres.
+- **Decision**: Flaky signal "passed on a previous run of same commit/branch" reads `ci_runs` history (status of prior runs for the same commit) from SQLite. No separate cache service.
+- **Rationale**: The SQLite tables already carry the needed history; an extra cache is unneeded complexity.
+- **Alternatives considered**: Redis/TTL cache — rejected: overkill at single-worker scale; history lives in SQLite.
 
 ## 11. Opportunity: evaluation dataset
 
-- **Decision**: Every classification log (category, evidence, confidence) becomes a labeled dataset for later classifier-quality evaluation (per project spec §5: "this gives you an eval set later").
+- **Decision**: Every classification log (category, evidence, confidence) becomes a labeled dataset for later classifier-quality evaluation.
 - **Rationale**: Free by-product of mandatory audit logging; no extra work now, big debugging value later.
 - **Alternatives considered**: none — zero-cost.
 
@@ -74,14 +74,14 @@ Phase 0 output — resolves every unknown from the plan's Technical Context with
 
 | # | Unknown/choice | Decision |
 |---|---|---|
-| 1 | Fleet reuse | Import from local `fleet/` clone via path alias (dev-only, gitignored) |
-| 2 | Webhook hosting | Fleet dashboard server + existing `WebhookHandler` |
+| 1 | Dependency strategy | Standalone — no Fleet clone; `node:sqlite` + direct `git worktree` calls |
+| 2 | Webhook hosting | Standalone `node:http` server on `CI_WEBHOOK_PORT`; `handleCiWebhook` is a pure exported function |
 | 3 | CI adapter | Canonical normalized event; GitHub Actions adapter first |
 | 4 | Classifier | Rule-first signals; LLM only for root-cause summary |
 | 5 | Confidence | Rule-strength-based; ≥ 0.7 to fix, < 0.7 escalate |
-| 6 | Fix guardrail | Allowlist of 4; MVP ships lint/format only |
+| 6 | Fix guardrail | Allowlist (`lint/format`, `import/type` + stubs); MVP ships both active patterns |
 | 7 | Flaky retry | Platform job rerun via `gh api`, max 3 |
-| 8 | Delivery | `ci-fix/<run-id>` branch + CI-run comment; no PR/merge |
-| 9 | Storage | 4 new Postgres tables + SOR chain reuse |
-| 10 | Flaky history | Postgres-based (ci_runs/classifications), no cache |
+| 8 | Delivery | `ci-fix/<run-id>` branch + fix-only PR + CI-run comment; no merge |
+| 9 | Storage | `node:sqlite`; SOR hash chain as append-only table in SQLite |
+| 10 | Flaky history | SQLite-based (`ci_runs`/`classifications`), no cache |
 | 11 | Eval set | Auto-collected from classification logs |

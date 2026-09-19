@@ -4,7 +4,7 @@
 
 ## Purpose
 
-The outbound contract: how the agent communicates with humans. Findings are posted as **comments on the CI run** via the platform API (`gh api` wrapper pattern from Fleet's `github/gh.ts`). A verified auto-fix is additionally surfaced as a **fix-only pull request** for human review (constitution principle V — comments + fix PR are the only delivery channels; the agent never merges).
+The outbound contract: how the agent communicates with humans. Findings are posted as **comments on the CI run** via the platform API (`gh` wrapper). A verified auto-fix is additionally surfaced as a **fix-only pull request** for human review (constitution principle V — comments + fix PR are the only delivery channels; the agent never merges).
 
 ## Authorization
 

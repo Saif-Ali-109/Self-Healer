@@ -48,4 +48,4 @@ The contract between the classifier role and the rest of the pipeline: the decis
 
 ## Compliance
 
-Every classification is persisted to `classifications` AND chained through Fleet's SOR ingest (constitution principle IV) — no silent decisions.
+Every classification is persisted to `classifications` AND chained through the SQLite SOR hash chain (constitution principle IV) — no silent decisions.

@@ -9,7 +9,7 @@ Defines the inbound contract: how a CI system notifies the agent of a failed run
 ## Transport
 
 - Method: `POST`
-- Path: `/api/webhook/ci` (mounted on Fleet's dashboard HTTP server)
+- Path: `/api/webhook/ci` (standalone `node:http` server on `CI_WEBHOOK_PORT`)
 - Content-Type: `application/json`
 - Max payload: 256 KB
 - Auth: `X-Webhook-Secret` header, HMAC-verified with the value of the `CI_WEBHOOK_SECRET` environment variable (secrets never appear in logs or records — constitution §Secrets).

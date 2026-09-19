@@ -2,7 +2,9 @@
 
 **Branch**: `001-self-healer-ci-agent` | **Date**: 2026-09-13 | **Plan**: [plan.md](plan.md)
 
-Extends the existing Fleet PostgreSQL schema (same database, same SOR hash-chain). Four new tables: `ci_runs`, `classifications`, `fix_attempts`, `escalations` (migrations `017`–`020`). Naming and conventions mirror Fleet's existing migrations (`UUID PK` via `gen_random_uuid()`, `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`).
+Self-contained `node:sqlite` database (built into Node 22+, zero extra dependencies). Seven tables: `ci_runs`, `classifications`, `fix_attempts`, `escalations`, `audit_events` (SOR hash chain), plus `ci_runs_skipped_status` and `fix_pr_url` columns. Migrations `001`–`022`.
+
+SQLite types used: `TEXT` (UUIDs, JSON, strings), `INTEGER` (counts, timestamps), `REAL` (confidence scores). No `JSONB` or `gen_random_uuid()` — application-side UUIDs via `crypto.randomUUID()`.
 
 ## Entity: CI Run
 
@@ -10,105 +12,120 @@ Represents one CI execution that failed and was picked up by the agent. The inta
 
 | Field | Type | Constraints / Notes |
 |---|---|---|
-| `run_id` | UUID | PK, `DEFAULT gen_random_uuid()` |
+| `run_id` | TEXT | PK — `crypto.randomUUID()` |
 | `external_run_id` | TEXT | NOT NULL — CI platform's run identifier (e.g., GitHub Actions run id) |
 | `repo` | TEXT | NOT NULL — `owner/name` slug |
 | `commit` | TEXT | NOT NULL — full commit SHA at failure |
 | `branch` | TEXT | NOT NULL — branch ref the failure occurred on |
 | `job_id` | TEXT | NOT NULL — failing job identifier |
 | `job_name` | TEXT | failing job name (for comments) |
-| `status` | TEXT | NOT NULL — `CHECK (status IN ('pending','classifying','retrying','fixing','escalated','resolved'))` |
+| `status` | TEXT | NOT NULL — `CHECK (status IN ('pending','classifying','retrying','fixing','escalated','resolved','skipped'))` |
 | `log_url` | TEXT | URL to failing job logs |
 | `artifact_url` | TEXT | URL to failure artifacts (nullable) |
-| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() |
-| `completed_at` | TIMESTAMPTZ | nullable |
+| `created_at` | INTEGER | NOT NULL — Unix timestamp |
+| `completed_at` | INTEGER | nullable — Unix timestamp |
 
-**Relationships**: `1 — N classifications` (a run can be re-evaluated), `1 — 0..1 fix_attempts` (hard cap of one), `1 — 0..1 escalations`. A run where a flaky classification resolves has no fix attempt and no escalation.
+**Relationships**: `1 — N classifications`, `1 — 0..1 fix_attempts` (hard cap of one), `1 — 0..1 escalations`.
 
-**Validation rules** (from FR-001/FR-002): `external_run_id` + `repo` + `job_id` must be unique per run (dedupe of duplicate webhooks); `status` transitions only forward (below); required to have `log_url` for any classification to proceed.
+**Validation rules**: `external_run_id` + `repo` + `job_id` must be unique per run (dedupe of duplicate webhooks); `status` transitions only forward; `log_url` required for any classification to proceed.
 
 **State transitions**:
 
 ```text
 pending → classifying → retrying → resolved        (flaky passes on rerun)
-                     │          └→ escalated        (flaky fails after 3 reruns)
-                     ├→ escalated                   (infra, confidence < 0.7, 5+ files,
-                     │                               critical branch, no pattern match)
-                     └→ fixing → resolved           (lint/format fix verified)
-                             └→ escalated            (fix verification failed)
+                      │          └→ escalated        (flaky fails after 3 reruns)
+                      ├→ escalated                   (infra, confidence < 0.7, 5+ files,
+                      │                               critical branch, no pattern match)
+                      └→ fixing → resolved           (lint/format fix verified)
+                              └→ escalated            (fix verification failed)
 ```
 
 ## Entity: Classification
 
-The verdict for a CI run failure. Every run gets exactly one *decision* classification (FR-003); reruns by the retry runner produce additional trace-within-pipeline records only if reclassified.
+The verdict for a CI run failure. Every run gets exactly one classification.
 
 | Field | Type | Constraints / Notes |
 |---|---|---|
-| `classification_id` | UUID | PK |
-| `run_id` | UUID | NOT NULL, FK → `ci_runs(run_id)` ON DELETE CASCADE |
+| `classification_id` | TEXT | PK |
+| `run_id` | TEXT | NOT NULL, FK → `ci_runs(run_id)` ON DELETE CASCADE |
 | `category` | TEXT | NOT NULL — `CHECK (category IN ('flaky','real_bug','infra'))` |
-| `confidence` | NUMERIC(3,2) | NOT NULL — 0.00–1.00 |
-| `evidence` | JSONB | NOT NULL — the signals/patterns that drove the decision (logs read, pattern matched) |
+| `confidence` | REAL | NOT NULL — 0.00–1.00 |
+| `evidence` | TEXT | NOT NULL — JSON string of signals/patterns that drove the decision |
 | `classifier_version` | TEXT | NOT NULL — deterministic signal-set version, e.g., `signals-v1` |
 | `model` | TEXT | nullable — LLM used only to enrich root-cause summary (subject to 3-call cap) |
 | `summary` | TEXT | human-readable root-cause summary (LLM-enriched for real bugs) |
-| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() |
+| `created_at` | INTEGER | NOT NULL — Unix timestamp |
 
-**Validation rules**: confidence must be a number in `[0,1]` with 2 decimal places; `evidence` must be non-empty (constitution principle II — no silent decisions); category must be one of the three.
-
-**Relationship**: `N — 1 ci_runs`.
+**Validation rules**: confidence must be a number in `[0,1]`; `evidence` must be non-empty; category must be one of the three.
 
 ## Entity: Fix Attempt
 
-The single auto-fix action for a failure (hard cap: **at most one per `run_id`**, per FR-010 and constitution principle III).
+The single auto-fix action for a failure (hard cap: at most one per `run_id`).
 
 | Field | Type | Constraints / Notes |
 |---|---|---|
-| `attempt_id` | UUID | PK |
-| `run_id` | UUID | NOT NULL, FK → `ci_runs(run_id)` ON DELETE CASCADE, UNIQUE |
-| `pattern_matched` | TEXT | NOT NULL — which allowlist pattern, e.g., `lint/format` (MVP: only this one) |
+| `attempt_id` | TEXT | PK |
+| `run_id` | TEXT | NOT NULL, FK → `ci_runs(run_id)` ON DELETE CASCADE, UNIQUE |
+| `pattern_matched` | TEXT | NOT NULL — which allowlist pattern, e.g., `lint/format`, `import/type` |
 | `diff` | TEXT | NOT NULL — the exact diff produced |
 | `branch` | TEXT | NOT NULL — the `ci-fix/<run-id>` branch pushed |
 | `verification_result` | TEXT | NOT NULL — `CHECK (verification_result IN ('passed','failed'))` |
 | `test_summary` | TEXT | what tests/checks were run for verification |
+| `fix_pr_url` | TEXT | URL of the fix-only PR opened |
 | `comment_url` | TEXT | URL of the CI-run comment posted |
-| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() |
+| `created_at` | INTEGER | NOT NULL — Unix timestamp |
 
 **Validation rules**: UNIQUE on `run_id` enforces the "no second attempt" rule at the database level; `diff` must be non-empty; `verification_result` must be set before the pipeline finishes.
 
-**Relationship**: `1 — 1 ci_runs` (0..1 per run).
-
 ## Entity: Escalation
 
-A human-facing handoff when the agent cannot or must not fix.
+A human-facing handoff for a failure (0..1 per run).
 
 | Field | Type | Constraints / Notes |
 |---|---|---|
-| `escalation_id` | UUID | PK |
-| `run_id` | UUID | NOT NULL, FK → `ci_runs(run_id)` ON DELETE CASCADE |
-| `reason` | TEXT | NOT NULL — `CHECK (reason IN ('low_confidence','fix_failed','multi_file','critical_branch','budget_exhausted','no_pattern_match','infra','flaky_retries_exhausted','checkout_failed'))` |
-| `summary` | TEXT | NOT NULL — human-readable root-cause summary |
-| `suggested_next_step` | TEXT | NOT NULL — what a human should do next |
-| `comment_url` | TEXT | URL of the escalation comment on the CI run |
-| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() |
+| `escalation_id` | TEXT | PK |
+| `run_id` | TEXT | NOT NULL, FK → `ci_runs(run_id)` ON DELETE CASCADE, UNIQUE |
+| `reason` | TEXT | NOT NULL — escalation reason code (e.g., `flaky_retries_exhausted`, `no_pattern_match`, `low_confidence`, `critical_branch`, `too_many_files`, `budget_exhausted`, `fix_failed`, `infra`) |
+| `summary` | TEXT | human-readable root-cause summary |
+| `suggested_next_step` | TEXT | what a human should do next |
+| `evidence` | TEXT | JSON string of evidence gathered |
+| `created_at` | INTEGER | NOT NULL — Unix timestamp |
 
-**Validation rules**: `reason` must be one of the enumerated values (each maps to one of the 6 constitution escalation triggers + infra + checkout failure); `summary` and `suggested_next_step` must be non-empty; a run may have **at most one** escalation (an escalated run is terminal for that pipeline) — enforced by unique index on `run_id`.
+## Entity: Audit Event (SOR hash chain)
 
-**Relationship**: `1 — 1 ci_runs` (0..1 per run).
+Append-only tamper-evident record of every decision.
 
-## SOR integration
+| Field | Type | Constraints / Notes |
+|---|---|---|
+| `event_id` | TEXT | PK |
+| `run_id` | TEXT | NOT NULL — links to the CI run |
+| `event_type` | TEXT | NOT NULL — `classification`, `retry`, `fix_attempt`, `escalation`, `status_change` |
+| `payload` | TEXT | NOT NULL — JSON string of the event data |
+| `prev_hash` | TEXT | NOT NULL — hash of the previous audit event (empty string for the first event) |
+| `event_hash` | TEXT | NOT NULL — `HMAC-SHA256(prev_hash || payload || key)` |
+| `created_at` | INTEGER | NOT NULL — Unix timestamp |
 
-- Every insert into `classifications`, `fix_attempts`, and `escalations` is mirrored through Fleet's SOR `ingest` with event type `phase` (or a `ci_*` event extension), so the tamper-evident hash-chain covers CI decisions alongside Fleet's existing issue-run decisions (constitution principle IV).
-- `ci_runs` row lifecycle (status changes) is itself chained as SOR events so state transitions are provable.
+**Tamper detection**: `sor:verify` replays the chain, recomputing each `event_hash` from `prev_hash || payload || key`. Any mismatch indicates tampering.
 
-## Indexes
+## Entity: ci_runs_skipped_status
 
-```sql
-CREATE UNIQUE INDEX uq_ci_runs_extrn ON ci_runs (external_run_id, repo, job_id);
-CREATE INDEX idx_classifications_run ON classifications (run_id);
-CREATE INDEX idx_classifications_category ON classifications (category, created_at);
-CREATE UNIQUE INDEX uq_fix_attempts_run ON fix_attempts (run_id);
-CREATE UNIQUE INDEX uq_escalations_run ON escalations (run_id);
-CREATE INDEX idx_ci_runs_commit ON ci_runs (repo, commit);
-CREATE INDEX idx_ci_runs_branch ON ci_runs (branch);
-```
+Tracks repos/branches skipped by the `ci-fix/*` guard or `self-healer-notify.yml` gating.
+
+| Field | Type | Constraints / Notes |
+|---|---|---|
+| `skip_id` | TEXT | PK |
+| `repo` | TEXT | NOT NULL |
+| `external_run_id` | TEXT | NOT NULL |
+| `reason` | TEXT | NOT NULL — e.g., `ci_fix_branch`, `not_authorized` |
+| `created_at` | INTEGER | NOT NULL |
+
+## Migrating from PostgreSQL
+
+When migrating from the Fleet/PostgreSQL architecture:
+1. Replace `pg` pool with `node:sqlite` connection
+2. Convert `UUID PK DEFAULT gen_random_uuid()` → `TEXT PK` with application-side UUIDs
+3. Convert `JSONB` columns → `TEXT` (store JSON strings)
+4. Convert `TIMESTAMPTZ DEFAULT now()` → `INTEGER` Unix timestamps
+5. Convert `NUMERIC(3,2)` → `REAL`
+6. Convert `gen_random_uuid()` → `LOWER(HEX(RANDOM()))` or application-side `crypto.randomUUID()`
+7. Remove Postgres-specific sequences, triggers, and constraints; rely on SQLite constraints + application logic

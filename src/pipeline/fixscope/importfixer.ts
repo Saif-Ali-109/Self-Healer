@@ -69,7 +69,7 @@ export function parseStackFrameCandidates(logText: string): string[] {
 		if (line.includes("node:internal")) continue;
 		const m = line.match(/file:\/\/([^\s)]+)/);
 		if (!m?.[1]) continue;
-		let path = m[1].replace(/:\d+:\d+$/, "");
+		let path = m[1].replace(/:\d+(?::\d+)?$/, "");
 		for (const prefix of RUNNER_ROOT_PREFIXES) {
 			path = path.replace(prefix, "");
 		}
@@ -89,8 +89,82 @@ function escapeRegExp(s: string): string {
 }
 
 /**
+ * Remove line and block comments (and shebang) from JS/TS source without
+ * corrupting string literals. Comments are not imports - a doc comment
+ * mentioning an import must not disqualify the file.
+ */
+function stripComments(source: string): string {
+	let out = "";
+	let i = 0;
+	let lineC = false;
+	let blockC = false;
+	let inSingle = false;
+	let inDouble = false;
+	let inTemplate = false;
+	while (i < source.length) {
+		const c = source[i]!;
+		const n = source[i + 1];
+		if (lineC) {
+			out += c === "\n" ? c : "";
+			if (c === "\n") lineC = false;
+			i++;
+			continue;
+		}
+		if (blockC) {
+			if (c === "*" && n === "/") {
+				blockC = false;
+				i += 2;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		if (!inSingle && !inDouble && !inTemplate) {
+			if (c === "/" && n === "/") {
+				lineC = true;
+				i += 2;
+				continue;
+			}
+			if (c === "/" && n === "*") {
+				blockC = true;
+				i += 2;
+				continue;
+			}
+		}
+		if (!inDouble && !inTemplate && c === "'") {
+			inSingle = !inSingle;
+			out += c;
+			i++;
+			continue;
+		}
+		if (!inSingle && !inTemplate && c === '"') {
+			inDouble = !inDouble;
+			out += c;
+			i++;
+			continue;
+		}
+		if (!inSingle && !inDouble && c === "`") {
+			inTemplate = !inTemplate;
+			out += c;
+			i++;
+			continue;
+		}
+		if (inTemplate && c === "\\") {
+			out += c + (n ?? "");
+			i += 2;
+			continue;
+		}
+		out += c;
+		i++;
+	}
+	return out;
+}
+
+/**
  * True when `source` references `symbol` as a bare token (not dot-qualified)
- * without importing or exporting it.
+ * without importing or exporting it. Comments are stripped first so a doc
+ * comment that merely mentions <symbol> (or the word "import") cannot mask
+ * the real missing-import bug.
  */
 function referencesSymbolExcludingImportsExports(
 	source: string,
@@ -99,10 +173,11 @@ function referencesSymbolExcludingImportsExports(
 	const e = escapeRegExp(symbol);
 	const bare = new RegExp(`(?<![.\\w])${e}\\b`);
 	if (!bare.test(source)) return false;
-	if (new RegExp(`\\bimport\\b[\\s\\S]{0,1000}?\\b${e}\\b`).test(source)) {
+	const code = stripComments(source);
+	if (new RegExp(`\\bimport\\b[\\s\\S]{0,500}?\\b${e}\\b`).test(code)) {
 		return false;
 	}
-	if (new RegExp(`\\bexport\\b[\\s\\S]{0,1000}?\\b${e}\\b`).test(source)) {
+	if (new RegExp(`\\bexport\\b[\\s\\S]{0,500}?\\b${e}\\b`).test(code)) {
 		return false;
 	}
 	return true;
