@@ -13,7 +13,11 @@ export interface EnqueueResult {
  * Uses the unique index (external_run_id, repo, job_id) for deduplication.
  */
 export class CiQueue {
-	constructor(private pool: Pool) {}
+	declare private pool: Pool;
+
+	constructor(pool: Pool) {
+		this.pool = pool;
+	}
 
 	async enqueue(ev: CiEvent): Promise<EnqueueResult> {
 		// Per-job-name dedup: the reporter re-fires on every workflow-run

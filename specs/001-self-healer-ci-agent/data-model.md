@@ -2,7 +2,7 @@
 
 **Branch**: `001-self-healer-ci-agent` | **Date**: 2026-09-13 | **Plan**: [plan.md](plan.md)
 
-Self-contained `node:sqlite` database (built into Node 22+, zero extra dependencies). Seven tables: `ci_runs`, `classifications`, `fix_attempts`, `escalations`, `audit_events` (SOR hash chain), plus `ci_runs_skipped_status` and `fix_pr_url` columns. Migrations `001`–`022`.
+Self-contained `node:sqlite` database (built into Node 22+, zero extra dependencies). Eight tables: `ci_runs`, `classifications`, `fix_attempts`, `escalations`, `audit_events` (SOR hash chain), `watched_repos`, plus `ci_runs_skipped_status` and `fix_pr_url` columns. Migrations `001`–`023` (021 is a documented no-op; 023 adds `watched_repos`).
 
 SQLite types used: `TEXT` (UUIDs, JSON, strings), `INTEGER` (counts, timestamps), `REAL` (confidence scores). No `JSONB` or `gen_random_uuid()` — application-side UUIDs via `crypto.randomUUID()`.
 
@@ -90,6 +90,19 @@ A human-facing handoff for a failure (0..1 per run).
 | `suggested_next_step` | TEXT | what a human should do next |
 | `evidence` | TEXT | JSON string of evidence gathered |
 | `created_at` | INTEGER | NOT NULL — Unix timestamp |
+
+## Entity: Watched Repo
+
+Repos opted in via `self-healer enable --repo owner/repo` (US6). Enabling writes
+`self-healer-notify.yml` to the repo on a `self-healer/enable` branch and opens a
+PR; the row is recorded at enable time so `status` can list watched repos.
+
+| Field | Type | Constraints / Notes |
+|---|---|---|
+| `repo` | TEXT | PK — `owner/repo` |
+| `added_at` | INTEGER | NOT NULL — Unix timestamp |
+| `workflow_branch` | TEXT | NOT NULL — branch carrying the reporter workflow |
+| `workflow_pr` | TEXT | PR that adds `self-healer-notify.yml` (human must merge) |
 
 ## Entity: Audit Event (SOR hash chain)
 

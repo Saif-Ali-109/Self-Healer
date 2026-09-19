@@ -26,7 +26,9 @@ src/
     fixscope/       allowlist + lintfixer + importfixer
     escalation/     reasons → suggested next step
   audit/            run reconstruction
-  db/               SQLite + migration runner (migrations 001–022)
+  db/               SQLite + migration runner (migrations 001–023)
+  cli/              self-healer commands: init / enable / start / status
+  paths.ts          package-root resolution (migrations/, assets/, dist/)
 ```
 
 ## Commands
@@ -35,9 +37,11 @@ src/
 | `npm start` | Run webhook listener + worker daemon |
 | `npm run typecheck` | TypeScript strict check |
 | `npm test` | Unit + integration tests (DB-gated suites skip without `DATABASE_URL`) |
-| `npm run migrate:up` | Apply migrations 001–022 |
+| `npm run migrate:up` | Apply migrations 001–023 |
 | `npm run sor:verify` | Replay-verify SOR hash chain |
 | `npm run audit:run -- <run-id>` | Reconstruct a past run |
+| `npm run build` | Bundle CLI + daemon to `dist/` (esbuild, build-time only) |
+| `node bin/self-healer.mjs <cmd>` | Run the built CLI directly (dev) |
 
 ## Fix-scope allowlist (active patterns)
 - **`lint/format`** — auto-formats, verified with `npx @biomejs/biome check .`
@@ -61,10 +65,16 @@ Goal: standalone npm package (`self-healer-ci-agent`) or Docker image.
 ```bash
 npm i -g self-healer-ci-agent
 self-healer init        # creates .env + SQLite DB
-self-healer enable --repo org/repo
+self-healer enable --repo org/repo   # reporter PR + register watched
+self-healer status      # db / queue / watched / SOR chain
 self-healer start       # daemon on :3457
 ```
-No Fleet clone, no PostgreSQL server, no extra dependencies.
+No Fleet clone, no PostgreSQL server. **Zero runtime dependencies**: source is
+bundled to plain JS (`dist/`, esbuild is a build-time devDependency) so the
+package installs and runs anywhere with Node ≥ 22.18. Migrations, the reporter
+template (`assets/self-healer-notify.yml`) and `.env.example` ship with the
+package; `bin/self-healer.mjs` pins the package root so `init` finds them from
+any working directory.
 
 ## Out of scope
 GitHub App form, multi-worker scaling, LLM enrichment beyond rule-first, dashboard UI, live demo re-run (after packaging completes).

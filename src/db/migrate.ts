@@ -8,8 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { closeDb, getDb } from "./sqlite.ts";
+import { packagePath } from "../paths.ts";
 
-const MIGRATIONS_DIR = path.resolve(process.cwd(), "migrations");
+// Package-relative so migrations resolve regardless of CWD or where the
+// bundled dist/ lives (global installs, daemon spawning, or repo runs).
+const MIGRATIONS_DIR = packagePath("migrations");
 
 function listMigrationFiles(): string[] {
 	if (!fs.existsSync(MIGRATIONS_DIR)) return [];

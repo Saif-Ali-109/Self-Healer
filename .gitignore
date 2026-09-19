@@ -23,6 +23,10 @@ build/
 # CI worktree scratch directory (cloned repos + diffs)
 .runs/
 
+# Built CLI/daemon bundles + packed artifacts
+dist/
+*.tgz
+
 # SQLite database files
 *.db
 *.db-journal

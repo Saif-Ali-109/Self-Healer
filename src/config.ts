@@ -1,6 +1,31 @@
 // Environment / secret loader — validates at startup, never logs values.
 
+import { existsSync, readFileSync } from "node:fs";
+
 const REQUIRED_ENV = ["GH_TOKEN", "CI_WEBHOOK_SECRET", "DATABASE_URL"] as const;
+
+/** Load `file` (default .env) into process.env if present. Variables already
+ *  set in the real process environment are never overridden; within the file,
+ *  later keys win (so `GH_TOKEN=` placeholder lines followed by a real value
+ *  resolve correctly). Idempotent. */
+export function loadEnvFile(file = ".env"): void {
+	try {
+		if (!existsSync(file)) return;
+		const preexisting = new Set(Object.keys(process.env));
+		for (const line of readFileSync(file, "utf8").split("\n")) {
+			const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+			if (!m) continue;
+			const key = m[1];
+			let value = m[2] ?? "";
+			if (value.startsWith('"') && value.endsWith('"')) {
+				value = value.slice(1, -1);
+			}
+			if (key && !preexisting.has(key)) process.env[key] = value;
+		}
+	} catch {
+		// ignore unreadable .env
+	}
+}
 
 export interface AppConfig {
 	ghToken: string;
@@ -22,6 +47,9 @@ export interface AppConfig {
  * Secrets are never logged or included in error messages beyond their key name.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+	// Load .env first so a bare `node src/...` (or the global CLI) works
+	// without the --env-file-if-exists npm flag.
+	loadEnvFile();
 	const required = (key: string): string => env[key] ?? "";
 	const missing = REQUIRED_ENV.filter((k) => {
 		const v = env[k];

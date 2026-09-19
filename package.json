@@ -1,14 +1,27 @@
 {
 	"name": "self-healer-ci-agent",
 	"version": "0.1.0",
-	"private": true,
 	"type": "module",
 	"description": "CI failure agent: classify flaky/real_bug/infra, retry flaky, auto-fix allowlisted bugs on a branch, escalate with comments, tamper-evident audit.",
+	"bin": {
+		"self-healer": "bin/self-healer.mjs"
+	},
+	"files": [
+		"bin",
+		"dist",
+		"migrations",
+		"assets",
+		".env.example",
+		"README.md"
+	],
 	"engines": {
-		"node": ">=22"
+		"node": ">=22.18"
 	},
 	"scripts": {
+		"build": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/self-healer.mjs && esbuild src/daemonEntry.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/daemon.mjs",
+		"prepack": "npm run build",
 		"start": "tsx --env-file-if-exists=.env src/index.ts",
+		"cli": "tsx src/cli/index.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
@@ -21,10 +34,10 @@
 		"sor:repair": "tsx --env-file-if-exists=.env src/sor/repairCli.ts",
 		"audit:run": "tsx --env-file-if-exists=.env src/audit/reconstruct.ts"
 	},
-	"dependencies": {},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.10",
 		"@types/node": "^22.10.0",
+		"esbuild": "^0.28.2",
 		"tsx": "^4.19.2",
 		"typescript": "^5.7.2",
 		"vitest": "^3.0.0"

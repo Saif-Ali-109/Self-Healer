@@ -15,7 +15,7 @@ const POLL_INTERVAL_MS = 2_000; // how often to check for pending ci_runs
 
 // ── Start ────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+export async function startDaemon(): Promise<void> {
 	const config = loadConfig();
 	console.log("▶ Self-Healer CI Agent starting...");
 
@@ -122,7 +122,15 @@ async function pollLoop(pool: Pool): Promise<void> {
 const sleep = (ms: number): Promise<void> =>
 	new Promise((r) => setTimeout(r, ms));
 
-main().catch((err) => {
-	console.error("Fatal:", err);
-	process.exit(1);
-});
+// Run the daemon when this file is the entry point (npm start, or a
+// `self-healer start` child). Importing it from the CLI must have no side effects.
+const isDirectRun =
+	process.argv[1]?.endsWith("src/index.ts") ||
+	process.argv[1]?.endsWith("index.ts");
+
+if (isDirectRun) {
+	startDaemon().catch((err) => {
+		console.error("Fatal:", err);
+		process.exit(1);
+	});
+}

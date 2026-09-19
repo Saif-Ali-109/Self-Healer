@@ -5,11 +5,11 @@
 > **fix-only pull request for human approval** (the robot never merges), and logs every
 > decision in a tamper-evident SOR audit chain.
 
-Built on the local [Fleet](https://github.com/Saif-Ali-109/Self-Healer/tree/main/fleet) clone
-(read-only dependency — Self-Healer reuses Fleet's SOR chain, git worktrees, and migration
-schema; Fleet source is never modified).
+Fully standalone Node.js daemon: persistence via `node:sqlite` (built into Node 22+),
+git worktrees for isolated fixes, and the SOR audit chain stored in SQLite. No Fleet
+clone, no PostgreSQL server, no runtime dependencies beyond Node itself.
 
-Governed by the project [Constitution v1.2.0](.specify/memory/constitution.md), which caps the
+Governed by the project [Constitution v1.3.0](.specify/memory/constitution.md), which caps the
 agent's autonomy: ≤ 3 LLM calls per failure, ≤ 3 flaky reruns, ≥ 0.7 confidence to fix, a
 10-minute budget per run, a single FIFO worker, and branch + comment delivery only.
 
@@ -21,7 +21,7 @@ agent's autonomy: ≤ 3 LLM calls per failure, ≤ 3 flaky reruns, ≥ 0.7 confi
 GitHub Actions webhook  ──▶  POST /api/webhook/ci   (HMAC-verified)
         │   normalize + dedupe (external_run_id + repo + job_id)
         ▼
-   ci_runs (pending)  ──▶  FIFO single worker (FOR UPDATE SKIP LOCKED)
+   ci_runs (pending)  ──▶  FIFO single worker (no row locking)
         │
         ▼
    worktree at failing commit  ──▶  classify (rule-first: flaky / infra / real_bug ≥ 0.7)
@@ -32,13 +32,13 @@ GitHub Actions webhook  ──▶  POST /api/webhook/ci   (HMAC-verified)
         └── infra      ──▶  escalate (infra)
 ```
 
-Every decision — classification, retry, fix attempt, escalation — is appended to Fleet's
-append-only SOR hash chain (`npm run sor:verify` proves tamper-freeness, `npm run audit:run`
-reconstructs a single run end-to-end).
+Every decision — classification, retry, fix attempt, escalation — is appended to the
+append-only SOR hash chain in SQLite (`npm run sor:verify` proves tamper-freeness,
+`npm run audit:run` reconstructs a single run end-to-end).
 
 ---
 
-## Constitution guardrails (v1.2.0)
+## Constitution guardrails (v1.3.0)
 
 | Guardrail | Enforcement |
 |-----------|-------------|
@@ -51,7 +51,7 @@ reconstructs a single run end-to-end).
 | Never touch protected branches | `main` / `release/*` / `v*` are never auto-fixed |
 | Never edit CI definition files | e.g. `.github/workflows/*` are out of fix scope |
 | Robot never merges | fixes ship as PRs; a human reviews and merges |
-| Tamper-evident audit | SOR hash chain + append-only DB trigger |
+| Tamper-evident audit | SOR hash chain in SQLite (verified on every `sor:verify`) |
 
 Webhooks from the agent's own `ci-fix/*` branches are ignored, and only repositories that
 carry the `self-healer-notify.yml` workflow trigger the daemon — so the agent can never loop
@@ -105,10 +105,23 @@ never guesses.
 
 ## Quick start
 
+### Install the package (standalone)
+
+```bash
+npm i -g self-healer-ci-agent      # zero runtime dependencies; needs Node ≥ 22.18
+cd my-project
+self-healer init                   # creates .env (secrets generated) + SQLite DB
+self-healer enable --repo owner/repo   # reporter workflow PR (human merges) + watched
+self-healer start                  # daemon: webhook :3457 + FIFO worker
+self-healer status                 # db, queue, watched repos, SOR chain
+```
+
+### Or run from this repo (dev)
+
 ```bash
 cp .env.example .env            # fill in REAL values (never commit .env)
 npm install
-npm run migrate:up              # applies Fleet 001–016 + Self-Healer 017–022
+npm run migrate:up              # applies migrations 001–023
 npm start                       # webhook listener + single-worker daemon
 ```
 
@@ -147,8 +160,8 @@ All secrets live in `.env` (gitignored). Required:
 |----------|---------|
 | `GH_TOKEN` | `gh` CLI auth: rerun jobs, post CI comments, push `ci-fix/*` branches |
 | `CI_WEBHOOK_SECRET` | HMAC secret for `X-Webhook-Secret` header verification |
-| `DATABASE_URL` | PostgreSQL connection string (Fleet schema 001–016 + Self-Healer 017–022) |
-| `SOR_SIGNING_KEY` | Key that signs the SOR audit chain (same as Fleet) |
+| `DATABASE_URL` | SQLite database file path (default `./data/self-healer.db`) |
+| `SOR_SIGNING_KEY` | Key that signs the SOR audit hash chain |
 
 Optional: `SOR_KEY_ID` (default `v1`), `CI_WEBHOOK_PORT` (default `3457`),
 `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL` (classifier enrichment — the
@@ -166,13 +179,14 @@ posting CI comments — used by tests).
 | `npm test` | Unit + integration tests (DB-gated suites skip without `DATABASE_URL`) |
 | `npm run lint` / `npm run format` | Biome lint / format |
 | `npm run migrate:up` / `migrate:down` | Apply / roll back migrations |
+| `npm run build` | Bundle CLI + daemon to `dist/` (esbuild, build-time only) |
 | `npm run sor:verify` | Replay-verify the SOR hash chain (`ok: yes` = tamper-free) |
 | `npm run sor:repair` | Re-sign the chain under the current key (key-loss recovery only) |
 | `npm run audit:run -- <run-id>` | Reconstruct what the agent saw/decided for a run |
 
 ### Audit reconstruction
 
-Every pipeline decision is chained into Fleet's append-only SOR hash chain:
+Every pipeline decision is chained into the SOR hash chain in SQLite:
 
 ```bash
 npm run audit:run -- <run-id>     # human-readable markdown from the 4 CI tables
@@ -182,8 +196,8 @@ npm run sor:verify                # chain integrity: detects any tampered record
 A `ci_runs` event records what the agent saw (repo, commit, branch, job logs);
 `classifications` captures category + confidence + evidence; `fix_attempts` records the one
 permitted attempt (diff, branch, verification result, fix PR URL); `escalations` captures
-the reason + suggested next step. The SOR chain binds them in order; an append-only DB
-trigger blocks in-app UPDATEs as defense-in-depth.
+the reason + suggested next step. The SOR chain binds them in order; `sor:verify` replays
+every hash against the signing key and flags any tampered record.
 
 ---
 
@@ -193,17 +207,18 @@ trigger blocks in-app UPDATEs as defense-in-depth.
 src/
   webhook/          HMAC-verified webhook server + GitHub Actions adapter
   pipeline/
-    queue.ts        FIFO worker queue (FOR UPDATE SKIP LOCKED)
+    queue.ts        FIFO worker queue (no row locking — single writer)
     orchestrator.ts classification → pattern-matched fix / retry / escalation dispatch
     classifier/     rule-first flaky / infra / real_bug (LLM optional)
     retry/          flaky rerun budget
     fixscope/       allowlist + lintfixer + importfixer (pure detection layers + shell drivers)
     escalation/     reasons → suggested next steps, DB + SOR chaining
   audit/            run reconstruction for auditing
-  db/               pool + migration runner (Fleet 001–016 + Self-Healer 017–022)
-fleet/              read-only local clone (SOR chain, worktrees, 001–016 migrations)
+  db/               SQLite wrapper + migration runner (migrations 001–023)
+  cli/              self-healer commands: init / enable / start / status
+  sor/              HMAC-SHA256 hash chain (verify / repair CLIs)
 specs/001-self-healer-ci-agent/
-  constitution→     .specify/memory/constitution.md (v1.2.0, the governing contract)
+  constitution→     .specify/memory/constitution.md (v1.3.0, the governing contract)
   plan.md / contracts/ / tasks.md / checklists/
 tests/              unit + integration suites
 ```

@@ -1,0 +1,66 @@
+name: self-healer-notify
+
+on:
+  workflow_run:
+    types: [completed]
+    workflows: ["ci"]
+
+permissions:
+  actions: read
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          SELF_HEALER_URL: ${{ secrets.SELF_HEALER_URL }}
+          CI_WEBHOOK_SECRET: ${{ secrets.CI_WEBHOOK_SECRET }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            const run = context.payload.workflow_run;
+            const repo = context.payload.repository;
+
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run.id,
+            });
+            const failed = data.jobs.filter((j) => j.conclusion === 'failure');
+            if (failed.length === 0) {
+              console.log('no failed jobs; nothing to send');
+              return;
+            }
+            for (const job of failed) {
+              const body = JSON.stringify({
+                action: "completed",
+                workflow_job: {
+                  id: job.id,
+                  run_id: run.id,
+                  head_branch: run.head_branch,
+                  head_sha: run.head_sha,
+                  name: job.name,
+                  conclusion: "failure",
+                  check_run_url: `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/actions/jobs/${job.id}`,
+                },
+                workflow_run: { id: run.id },
+                repository: repo,
+              });
+              const sig = "sha256=" + crypto
+                .createHmac("sha256", process.env.CI_WEBHOOK_SECRET)
+                .update(body)
+                .digest("hex");
+              const res = await fetch(`${process.env.SELF_HEALER_URL}/api/webhook/ci`, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "x-github-event": "workflow_job",
+                  "x-webhook-secret": sig,
+                },
+                body,
+              });
+              console.log(`self-healer webhook for job ${job.id}: ${res.status}`);
+              console.log(await res.text());
+            }
