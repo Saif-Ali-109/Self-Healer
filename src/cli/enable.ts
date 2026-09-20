@@ -15,6 +15,42 @@ import { packagePath } from "../paths.ts";
 const exec = promisify(execFile);
 const NOTIFY_TEMPLATE = packagePath("assets", "self-healer-notify.yml");
 
+export const ENABLE_PR_BODY = [
+	"This PR adds the `self-healer-notify` workflow: when a CI job fails, it",
+	"posts the failure to the Self-Healer CI agent, which classifies it",
+	"(flaky / real_bug / infra), retries flaky runs, and auto-fixes allowlisted",
+	"bugs via fix-only PRs (which also require a human merge).",
+	"",
+	"Before merging: add the `SELF_HEALER_URL` and `CI_WEBHOOK_SECRET` repo secrets.",
+].join("\n");
+
+/**
+ * Build the `gh pr create` argv for the reporter PR. Exported for tests.
+ * Regression: v1.0.1 passed `--jq .html_url`, which `gh pr create` rejects
+ * (that flag is `gh pr view`/`gh api` territory) — the URL comes from stdout,
+ * which the `gh()` helper already trims.
+ */
+export function prCreateArgs(
+	repo: string,
+	base: string,
+	head: string,
+): string[] {
+	return [
+		"pr",
+		"create",
+		"--repo",
+		repo,
+		"--base",
+		base,
+		"--head",
+		head,
+		"--title",
+		"🤖 Enable Self-Healer CI agent",
+		"--body",
+		ENABLE_PR_BODY,
+	];
+}
+
 /** Run `gh <args>` and return trimmed stdout. Throws on non-zero exit. */
 async function gh(args: string[]): Promise<string> {
 	const { stdout } = await exec("gh", args, { maxBuffer: 16 * 1024 * 1024 });
@@ -96,30 +132,7 @@ export async function cliEnable(repo: string): Promise<void> {
 	]);
 
 	// 5. Open the PR (human merges).
-	const body = [
-		"This PR adds the `self-healer-notify` workflow: when a CI job fails, it",
-		"posts the failure to the Self-Healer CI agent, which classifies it",
-		"(flaky / real_bug / infra), retries flaky runs, and auto-fixes allowlisted",
-		"bugs via fix-only PRs (which also require a human merge).",
-		"",
-		"Before merging: add the `SELF_HEALER_URL` and `CI_WEBHOOK_SECRET` repo secrets.",
-	].join("\n");
-	const prUrl = await gh([
-		"pr",
-		"create",
-		"--repo",
-		repo,
-		"--base",
-		defaultBranch,
-		"--head",
-		branch,
-		"--title",
-		"🤖 Enable Self-Healer CI agent",
-		"--body",
-		body,
-		"--jq",
-		".html_url",
-	]);
+	const prUrl = await gh(prCreateArgs(repo, defaultBranch, branch));
 
 	await registerWatched(repo, branch, prUrl);
 	console.log(
