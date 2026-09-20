@@ -261,7 +261,7 @@ lines in fix comments (`**Pattern matched**: import/type`).
 
 ## Validation status
 
-- **Tests**: 129 passing (`npm test`) comprising unit tests for classifier, retry budget,
+- **Tests**: 131 passing (`npm test`) comprising unit tests for classifier, retry budget,
   fix scope, fixer detection, escalation, comments, security, webhook contract, CLI (arg
   parsing, `enable` watched-repo registration + reporter-PR argv, `status` rendering,
   `stop` + pid file, daemon-bundle single boot, package-root resolution), plus DB-gated

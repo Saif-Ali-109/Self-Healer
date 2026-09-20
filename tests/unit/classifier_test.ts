@@ -48,9 +48,51 @@ describe("detectSignals", () => {
 	});
 
 	it("returns no signals for a generic failure", () => {
-		expect(detectSignals("Expected 'x' but received 'y' in widget.test.ts")).toEqual(
-			[],
-		);
+		expect(
+			detectSignals("Expected 'x' but received 'y' in widget.test.ts"),
+		).toEqual([]);
+	});
+
+	it("does not flag bare 401/429/503 digits in ordinary content (T057 regression)", () => {
+		// GitHub Actions temp-dir UUIDs embed digit runs; live test showed
+		// `-1591-4291-bd6e-` (substring "429") misclassified a real lint failure
+		// as infra. Status-code signals now require HTTP-ish context.
+		const uuidLog =
+			"[command]/usr/bin/git init /home/runner/work/o/r\n" +
+			"Temporarily overriding HOME='/home/runner/work/_temp/27bc7100-1591-4291-bd6e-4b67dae3c2a2' before making global git config changes\n" +
+			"##[error]File content differs from formatting output";
+		const signals = detectSignals(uuidLog);
+		expect(signals.filter((s) => s.category === "infra")).toEqual([]);
+		expect(signals).toEqual([]);
+
+		expect(
+			detectSignals(
+				"parsed 429 rows, then port 4015 finally opened at line 503",
+			).filter((s) => s.category === "infra"),
+		).toEqual([]);
+	});
+
+	it("still flags status codes with HTTP-ish context", () => {
+		expect(
+			detectSignals("HTTP 429 Too Many Requests").some(
+				(s) => s.category === "infra" && s.signal === "rate_limit",
+			),
+		).toBe(true);
+		expect(
+			detectSignals("GitHub API responded: 429 Too Many Requests").some(
+				(s) => s.category === "infra" && s.signal === "rate_limit",
+			),
+		).toBe(true);
+		expect(
+			detectSignals("status: 401 Unauthorized — token expired").some(
+				(s) => s.category === "infra" && s.signal === "expired_credentials",
+			),
+		).toBe(true);
+		expect(
+			detectSignals("HTTP 503 Service Unavailable").some(
+				(s) => s.category === "infra" && s.signal === "service_unavailable",
+			),
+		).toBe(true);
 	});
 });
 

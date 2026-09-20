@@ -58,7 +58,11 @@ const INFRA_SIGNALS: Array<{
 	strength: SignalMatch["strength"];
 }> = [
 	{
-		pattern: /rate\s+limit|429|too\s+many\s+requests/i,
+		// Bare `429` must NOT match alone — GitHub Actions writes random temp
+		// UUIDs like `_temp/27bc7100-1591-4291-bd6e-...` into job logs, which
+		// live-test surfaced as a false positive (lint failure misread as infra).
+		pattern:
+			/rate\s*limit|too\s*many\s*requests|429\s+too\s+many|(?:http|status(?:\s+code)?)\s*[:\s]*\s*429/i,
 		signal: "rate_limit",
 		strength: "strong",
 	},
@@ -73,13 +77,15 @@ const INFRA_SIGNALS: Array<{
 		strength: "strong",
 	},
 	{
+		// Same rule as rate_limit: require HTTP-ish context for the status code.
 		pattern:
-			/expired|unauthorized|invalid.*credentials|authentication\s+failed|401/i,
+			/expired|unauthorized|invalid\s+(?:credentials?|token|auth)|authentication\s+failed|401\s+unauthorized|(?:http|status(?:\s+code)?)\s*[:\s]*\s*401/i,
 		signal: "expired_credentials",
 		strength: "strong",
 	},
 	{
-		pattern: /503|service\s+unavailable|ECONNREFUSED.*registry/i,
+		pattern:
+			/service\s+unavailable|503\s+service\b|ECONNREFUSED.*registry|(?:http|status(?:\s+code)?)\s*[:\s]*\s*503/i,
 		signal: "service_unavailable",
 		strength: "moderate",
 	},
