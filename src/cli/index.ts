@@ -5,12 +5,11 @@
 //   self-healer start                 run the daemon (webhook :3457 + worker)
 //   self-healer status                report db/queue/SOR/watch state
 
-import { cliInit } from "./init.ts";
+import { parseCliArgs } from "./args.ts";
 import { cliEnable } from "./enable.ts";
+import { cliInit } from "./init.ts";
 import { cliStart } from "./start.ts";
 import { cliStatus } from "./status.ts";
-
-const args = process.argv.slice(2);
 
 function printHelp(): void {
 	console.log(`self-healer — CI failure agent (standalone, node:sqlite)
@@ -33,31 +32,23 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
-const command = args[0] ?? "help";
+const { command, force, foreground, repo, repoValid } = parseCliArgs(
+	process.argv.slice(2),
+);
 
 switch (command) {
 	case "init":
-		await cliInit(args.includes("--force"));
+		await cliInit(force);
 		break;
 	case "enable": {
-		const flagIdx = args.findIndex(
-			(a) => a === "--repo" || a.startsWith("--repo="),
-		);
-		const flag = flagIdx >= 0 ? args[flagIdx] : undefined;
-		const repo =
-			flag === undefined
-				? undefined
-				: flag.startsWith("--repo=")
-					? flag.slice("--repo=".length)
-					: args[flagIdx! + 1];
-		if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+		if (repo === undefined || !repoValid) {
 			fail("usage: self-healer enable --repo owner/repo");
 		}
 		await cliEnable(repo);
 		break;
 	}
 	case "start":
-		await cliStart(args.includes("--foreground"));
+		await cliStart(foreground);
 		break;
 	case "status":
 		await cliStatus();

@@ -197,6 +197,7 @@ description: "Task list template for feature implementation"
 - [X] T050 [US6] Packaging — esbuild bundles to `dist/` (build-time only; zero runtime deps — Node type-stripping doesn't work under `node_modules`, so TS can't ship raw), `bin/self-healer.mjs` pins `SELF_HEALER_PKG`, `"files"` = bin/dist/migrations/assets/.env.example
 - [X] T051 [US6] Global-install validation — `npm pack` → `npm i -g` → `init`/`status`/`start` from a fresh project; daemon boots from `dist/daemon.mjs` under node_modules; webhook accepts on `:3457`
 - [X] T052 Verify standalone end-to-end — typecheck clean, 88/88 tests, `sor:verify` `ok: yes`, `migrate:up`/`down` idempotent, SOR tamper test green on SQLite
+- [X] T053 CLI test coverage — `src/cli/args.ts` (pure `parseCliArgs`, both `--repo o/r` and `--repo=o/r` forms — regression for the live-found parsing bug), `renderEnvFile`/`generateSecret`, `registerWatched` upsert vs `watched_repos`, `status` output rendering (DB-gated). Also fixes a dev-CLI side effect: the `src/index.ts` direct-run guard no longer matches `src/cli/index.ts`, so `tsx src/cli/index.ts status|help|init` no longer boots a background daemon
 
 ---
 

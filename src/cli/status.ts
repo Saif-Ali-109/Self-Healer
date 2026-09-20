@@ -1,17 +1,19 @@
 // `self-healer status` — report database, pending queue, watched repos, SOR chain.
 
-import { loadConfig } from "../config.ts";
-import { getPool, closePool } from "../db/pool.ts";
+import { type AppConfig, loadConfig } from "../config.ts";
+import { closePool, getPool } from "../db/pool.ts";
 import { resolveDbPath } from "../db/sqlite.ts";
 import { verifyChain } from "../sor/chain.ts";
 
 export async function cliStatus(): Promise<void> {
-	let config;
+	let config: AppConfig;
 	try {
 		config = loadConfig();
 	} catch (err) {
 		console.error(`✗ configuration incomplete: ${String(err)}`);
-		console.error("  Run `self-healer init` and fill in GH_TOKEN in .env first.");
+		console.error(
+			"  Run `self-healer init` and fill in GH_TOKEN in .env first.",
+		);
 		process.exit(1);
 	}
 
@@ -65,8 +67,12 @@ export async function cliStatus(): Promise<void> {
 		`  watched  : ${watched.length > 0 ? "" : "(none — run `self-healer enable --repo owner/repo`)"}`,
 	);
 	for (const w of watched) {
-		console.log(`    - ${w.repo}${w.workflow_pr ? ` (PR ${w.workflow_pr})` : ""}`);
+		console.log(
+			`    - ${w.repo}${w.workflow_pr ? ` (PR ${w.workflow_pr})` : ""}`,
+		);
 	}
 
+	// Close the DB so the one-shot CLI process exits (the handle would
+	// otherwise keep the event loop alive).
 	await closePool();
 }

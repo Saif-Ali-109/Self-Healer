@@ -8,8 +8,8 @@ import { mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../config.ts";
 import { resolveDbPath } from "../db/sqlite.ts";
-import { packagePath } from "../paths.ts";
 import { startDaemon } from "../index.ts";
+import { packagePath } from "../paths.ts";
 
 const INDEX_PATH = packagePath("dist", "daemon.mjs");
 
@@ -17,7 +17,9 @@ export async function cliStart(foreground = false): Promise<void> {
 	const config = loadConfig(); // validates env + loads .env
 
 	if (foreground) {
-		console.log(`▶ Self-Healer starting in foreground (webhook :${config.webhookPort})`);
+		console.log(
+			`▶ Self-Healer starting in foreground (webhook :${config.webhookPort})`,
+		);
 		await startDaemon(); // blocks until shutdown
 		return;
 	}

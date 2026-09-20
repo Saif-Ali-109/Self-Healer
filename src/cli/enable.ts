@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { loadConfig } from "../config.ts";
-import { getPool } from "../db/pool.ts";
+import { getPool, type Pool } from "../db/pool.ts";
 import { packagePath } from "../paths.ts";
 
 const exec = promisify(execFile);
@@ -22,13 +22,15 @@ async function gh(args: string[]): Promise<string> {
 }
 
 export async function cliEnable(repo: string): Promise<void> {
-	const config = loadConfig(); // validates GH_TOKEN etc.
+	loadConfig(); // validates GH_TOKEN etc. (existence is the contract here)
 
 	// 1. Repo must exist and be readable with the configured token.
 	try {
 		await gh(["api", `repos/${repo}`]);
 	} catch {
-		console.error(`✗ repo ${repo} not found or not accessible (check GH_TOKEN)`);
+		console.error(
+			`✗ repo ${repo} not found or not accessible (check GH_TOKEN)`,
+		);
 		process.exit(1);
 	}
 
@@ -120,21 +122,25 @@ export async function cliEnable(repo: string): Promise<void> {
 	]);
 
 	await registerWatched(repo, branch, prUrl);
-	console.log(`✔ ${repo} enabled — reporter PR opened (human review required):`);
+	console.log(
+		`✔ ${repo} enabled — reporter PR opened (human review required):`,
+	);
 	console.log(`  ${prUrl}`);
 	console.log(
 		`  Add secrets SELF_HEALER_URL + CI_WEBHOOK_SECRET to ${repo} before merging.`,
 	);
-	console.log(`  (The agent never merges; this repo becomes active when you merge the PR.)`);
+	console.log(
+		`  (The agent never merges; this repo becomes active when you merge the PR.)`,
+	);
 }
 
-/** Upsert the repo into watched_repos. */
-async function registerWatched(
+/** Upsert the repo into watched_repos. Exported for tests (pool injectable). */
+export async function registerWatched(
 	repo: string,
 	branch: string,
 	prUrl: string | null,
+	pool: Pool = getPool(),
 ): Promise<void> {
-	const pool = getPool();
 	try {
 		await pool.query(
 			`INSERT INTO watched_repos (repo, added_at, workflow_branch, workflow_pr)
