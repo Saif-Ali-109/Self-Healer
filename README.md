@@ -113,8 +113,24 @@ cd my-project
 self-healer init                   # creates .env (secrets generated) + SQLite DB
 self-healer enable --repo owner/repo   # reporter workflow PR (human merges) + watched
 self-healer start                  # daemon: webhook :3457 + FIFO worker
-self-healer status                 # db, queue, watched repos, SOR chain
+self-healer status                 # db, queue, daemon, watched repos, SOR chain
+self-healer stop                   # graceful stop (reads data/self-healer.pid)
 ```
+
+### One-time setup: mute `ci` workflow notifications
+
+When a watched `ci` workflow fails, GitHub emails everyone subscribed — and because the
+agent reruns flaky jobs up to 3×, one run can produce several failure emails. This is normal
+GitHub behaviour, not an agent problem, but it is noise for the team.
+
+The workflow **keeps running and still reports to the agent** either way — you're only
+silencing the emails:
+
+1. Open the repo → **Settings → Actions → General → Notifications**.
+2. Mute the `ci` workflow (or set a personal watch preference via the bell on any `ci` run).
+
+That's it. Failures still reach the webhook, get classified, rerun, and fixed exactly as
+before — the team just stops getting pinged on every flaky rerun.
 
 ### Or run from this repo (dev)
 
@@ -215,7 +231,7 @@ src/
     escalation/     reasons → suggested next steps, DB + SOR chaining
   audit/            run reconstruction for auditing
   db/               SQLite wrapper + migration runner (migrations 001–023)
-  cli/              self-healer commands: init / enable / start / status
+  cli/              self-healer commands: init / enable / start / stop / status
   sor/              HMAC-SHA256 hash chain (verify / repair CLIs)
 specs/001-self-healer-ci-agent/
   constitution→     .specify/memory/constitution.md (v1.3.0, the governing contract)
@@ -245,10 +261,12 @@ lines in fix comments (`**Pattern matched**: import/type`).
 
 ## Validation status
 
-- **Tests**: 88 passing (`npm test`) comprising unit tests for classifier, retry budget,
-  fix scope, fixer detection, escalation, comments, security, webhook contract, plus DB-gated
-  integration suites (SOR chaining, tamper-recovery, audit reconstruction). DB-gated suites
-  use `DATABASE_URL` from the environment or a local `.env` and skip cleanly when absent.
+- **Tests**: 126 passing (`npm test`) comprising unit tests for classifier, retry budget,
+  fix scope, fixer detection, escalation, comments, security, webhook contract, CLI (arg
+  parsing, `enable` watched-repo registration, `status` rendering, `stop` + pid file,
+  daemon-bundle single boot, package-root resolution), plus DB-gated integration suites
+  (SOR chaining, tamper-recovery, audit reconstruction). DB-gated suites use
+  `DATABASE_URL` from the environment or a local `.env` and skip cleanly when absent.
 - **Typecheck**: `npm run typecheck` (tsc strict) clean.
 - **SOR**: `npm run sor:verify` reports a tamper-free chain; tamper simulation is detected
   and recovers after restore.

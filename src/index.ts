@@ -122,12 +122,13 @@ async function pollLoop(pool: Pool): Promise<void> {
 const sleep = (ms: number): Promise<void> =>
 	new Promise((r) => setTimeout(r, ms));
 
-// Run the daemon when this file is the entry point (npm start, or a
-// `self-healer start` child). Importing it from the CLI must have no side effects —
-// match exact entry suffixes so `src/cli/index.ts` (dev CLI) never triggers it.
-const isDirectRun =
-	process.argv[1]?.endsWith("src/index.ts") ||
-	process.argv[1]?.endsWith("dist/daemon.mjs");
+// Run the daemon when this file is the entry point (dev: `npm start` /
+// `tsx src/index.ts`). The packaged daemon (dist/daemon.mjs) starts via
+// src/daemonEntry.ts instead, so matching only the dev entry keeps this
+// side-effect-free when imported — src/cli/* and the daemon child included.
+// (Matching "dist/daemon.mjs" here caused a double-boot: daemonEntry calls
+// startDaemon(), then this guard fired a second one → EADDRINUSE → exit.)
+const isDirectRun = process.argv[1]?.endsWith("src/index.ts");
 
 if (isDirectRun) {
 	startDaemon().catch((err) => {

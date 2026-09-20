@@ -132,6 +132,9 @@ export async function cliEnable(repo: string): Promise<void> {
 	console.log(
 		`  (The agent never merges; this repo becomes active when you merge the PR.)`,
 	);
+	console.log(
+		`  Tip: mute \`ci\` workflow notification emails under Settings → Actions → Notifications`,
+	);
 }
 
 /** Upsert the repo into watched_repos. Exported for tests (pool injectable). */

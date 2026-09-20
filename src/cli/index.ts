@@ -10,6 +10,7 @@ import { cliEnable } from "./enable.ts";
 import { cliInit } from "./init.ts";
 import { cliStart } from "./start.ts";
 import { cliStatus } from "./status.ts";
+import { cliStop } from "./stop.ts";
 
 function printHelp(): void {
 	console.log(`self-healer — CI failure agent (standalone, node:sqlite)
@@ -21,6 +22,7 @@ Usage:
                                       PR (never merged by the agent) + register watched
   self-healer start [--foreground]    run the daemon: webhook on :3457 + FIFO worker
                                       (default: detached, logs to data/self-healer.log)
+  self-healer stop                    stop the daemon (reads data/self-healer.pid)
   self-healer status                  show database, pending queue, watched repos, SOR chain
 
 Env (from .env — see .env.example):
@@ -49,6 +51,9 @@ switch (command) {
 	}
 	case "start":
 		await cliStart(foreground);
+		break;
+	case "stop":
+		await cliStop();
 		break;
 	case "status":
 		await cliStatus();

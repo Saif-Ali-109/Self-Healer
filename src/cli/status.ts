@@ -4,6 +4,7 @@ import { type AppConfig, loadConfig } from "../config.ts";
 import { closePool, getPool } from "../db/pool.ts";
 import { resolveDbPath } from "../db/sqlite.ts";
 import { verifyChain } from "../sor/chain.ts";
+import { daemonPidPath, daemonStatusText } from "./pidfile.ts";
 
 export async function cliStatus(): Promise<void> {
 	let config: AppConfig;
@@ -61,6 +62,7 @@ export async function cliStatus(): Promise<void> {
 		`  schema   : ${applied} migration(s) applied; tables: ${tables.join(", ")}`,
 	);
 	console.log(`  webhook  : :${config.webhookPort} (POST /api/webhook/ci)`);
+	console.log(`  daemon   : ${daemonStatusText(daemonPidPath())}`);
 	console.log(`  queue    : ${pending} pending, ${processed} processed`);
 	console.log(`  SOR chain: ${sorLine}`);
 	console.log(

@@ -70,6 +70,12 @@ describe("parseCliArgs", () => {
 		expect(parseCliArgs(["status"]).command).toBe("status");
 	});
 
+	it("parses stop", () => {
+		const a = parseCliArgs(["stop"]);
+		expect(a.command).toBe("stop");
+		expect(a.foreground).toBe(false);
+	});
+
 	it("maps help / --help / -h through for the dispatcher", () => {
 		for (const c of ["help", "--help", "-h"]) {
 			expect(parseCliArgs([c]).command).toBe(c);

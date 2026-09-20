@@ -10,6 +10,7 @@ import { loadConfig } from "../config.ts";
 import { resolveDbPath } from "../db/sqlite.ts";
 import { startDaemon } from "../index.ts";
 import { packagePath } from "../paths.ts";
+import { daemonPidPath, writePidFile } from "./pidfile.ts";
 
 const INDEX_PATH = packagePath("dist", "daemon.mjs");
 
@@ -36,8 +37,17 @@ export async function cliStart(foreground = false): Promise<void> {
 	});
 	child.unref();
 
+	const pidPath = daemonPidPath(process.cwd());
+	if (child.pid) {
+		try {
+			writePidFile(pidPath, child.pid);
+		} catch {
+			// pid file is best-effort bookkeeping; the daemon still runs
+		}
+	}
+
 	console.log(`▶ Self-Healer daemon started (pid ${child.pid})`);
 	console.log(`  webhook :${config.webhookPort} → db ${resolveDbPath()}`);
 	console.log(`  logs: ${logPath}`);
-	console.log(`  stop with: kill ${child.pid}`);
+	console.log("  stop with: self-healer stop (or `kill` manually)");
 }
