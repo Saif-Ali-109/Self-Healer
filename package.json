@@ -1,6 +1,6 @@
 {
 	"name": "self-healer-ci-agent",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"type": "module",
 	"description": "CI failure agent: classify flaky/real_bug/infra, retry flaky, auto-fix allowlisted bugs on a branch, escalate with comments, tamper-evident audit.",
 	"bin": {
