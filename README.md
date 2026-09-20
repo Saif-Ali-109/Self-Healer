@@ -117,6 +117,49 @@ self-healer status                 # db, queue, daemon, watched repos, SOR chain
 self-healer stop                   # graceful stop (reads data/self-healer.pid)
 ```
 
+### Run under systemd (production / crash-proof)
+
+`self-healer start` spawns a detached child that **nothing restarts** if it crashes — a
+dead daemon with a live Cloudflare tunnel silently drops webhooks. For supervised
+running, use a systemd **user unit** (mirrors the existing `openclaw-gateway.service` on
+this machine — systemd 255, `Linger=yes`):
+
+```ini
+# ~/.config/systemd/user/self-healer.service
+[Unit]
+Description=Self-Healer CI Agent (webhook :3457 + FIFO worker)
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+ExecStart=/home/ain/.nvm/versions/node/v22.22.2/bin/node /absolute/path/to/self-healer/dist/daemon.mjs
+WorkingDirectory=/absolute/path/to/self-healer
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+Environment=HOME=/home/ain
+Environment=PATH=/usr/bin:/home/ain/.nvm/versions/node/v22.22.2/bin:/home/ain/.local/bin:/bin
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now self-healer   # start now + at boot (Linger)
+systemctl --user status self-healer         # is it up? (use this, not `status`)
+journalctl --user -u self-healer -n 50      # logs
+```
+
+Under systemd, manage the daemon with `systemctl --user stop/start/restart self-healer`
+— do **not** use `self-healer start|stop` (the detached child would double-bind `:3457`),
+and `self-healer status` shows `stopped` because the pid file is only written by the CLI
+spawn path. Start the Cloudflare tunnel only after the daemon is ready:
+`scripts/start-stack.sh` (waits for `GET /health` → 200, then launches
+`cloudflared tunnel --url http://localhost:3457`).
+
 ### One-time setup: mute `ci` workflow notifications
 
 When a watched `ci` workflow fails, GitHub emails everyone subscribed — and because the
@@ -154,9 +197,14 @@ The handler validates an `X-Webhook-Secret` HMAC-SHA256 header and returns:
 | `401` | Missing or invalid webhook secret |
 | `409` | Duplicate event (unique `external_run_id + repo + job_id`) |
 
+Readiness: `GET /health` → `200 {"ok":true}` (no auth). Because the server only binds
+after the DB connects, a reachable `/health` means the daemon is fully ready — use it in
+startup ordering / supervisors instead of probing the POST route for 401/404.
+
 ### Testing the webhook locally
 
 ```bash
+curl -fsS http://127.0.0.1:3457/health          # → {"ok":true} (200)
 node --input-type=module -e '
   const { createHmac } = await import("node:crypto");
   const body = JSON.stringify({ action: "completed", workflow_job: { id: 42, run_id: 7, head_branch: "feature/x", head_sha: "abc", repo: { full_name: "acme/widget" }, name: "test", conclusion: "failure" } });
@@ -261,8 +309,9 @@ lines in fix comments (`**Pattern matched**: import/type`).
 
 ## Validation status
 
-- **Tests**: 131 passing (`npm test`) comprising unit tests for classifier, retry budget,
-  fix scope, fixer detection, escalation, comments, security, webhook contract, CLI (arg
+- **Tests**: 132 passing (`npm test`) comprising unit tests for classifier, retry budget,
+  fix scope, fixer detection, escalation, comments, security, webhook contract (incl.
+  `GET /health` readiness), CLI (arg
   parsing, `enable` watched-repo registration + reporter-PR argv, `status` rendering,
   `stop` + pid file, daemon-bundle single boot, package-root resolution), plus DB-gated
   integration suites

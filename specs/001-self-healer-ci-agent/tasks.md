@@ -205,6 +205,23 @@ description: "Task list template for feature implementation"
 
 ---
 
+## Phase 10: Deployment Reliability Fix (2026-09-20, post-v1.0.3)
+
+**Purpose**: Prevent recurrence of the live-observed `connection refused` webhook loss
+(daemon down while cloudflared tunnel up → notify's one-shot `fetch` drops the event) and
+auto-recover if the daemon dies. Source = plan.md "Addendum: Deployment Reliability Fix".
+Scope: `GET /health`, systemd user unit, readiness-gated tunnel startup, live verification.
+Explicitly **future work** (plan.md Deliverables (E), no tasks here): backfill-on-startup,
+notify-workflow delivery retry, named tunnel + ingress healthcheck, `uncaughtException`
+handler + crash telemetry, `status` aware of systemd-managed daemon.
+
+- [X] T058 `GET /health` endpoint — `src/webhook/server.ts` route beside the POST handler returning `200 {"ok":true}`; `GET /health → 200` test in `tests/integration/webhook_test.ts`; contract line in `contracts/`; README "Validation status" bump. `startDaemon` connects the DB *before* binding the server, so 200 implies DB readiness — the unambiguous ready contract for supervisors (401/404 are semantically "wrong key/wrong path")
+- [X] T059 systemd user unit `~/.config/systemd/user/self-healer.service` (outside repo) — `ExecStart=/home/ain/.nvm/versions/node/v22.22.2/bin/node …/Self-Healer/dist/daemon.mjs` (concrete nvm path; no `current` symlink), `WorkingDirectory=/home/ain/Desktop/Self-Healer` (`.env` loads from cwd — no `EnvironmentFile`), `Restart=always` + `RestartSec=3`, `TimeoutStopSec=30`, `Environment=HOME` + `Environment=PATH` (includes nvm bin → lintfixer's `npx biome`), `WantedBy=default.target`; `StartLimitBurst=5`/`StartLimitIntervalSec=60`. README systemd note: stop/start via `systemctl --user`, **not** `self-healer start/stop` (detached child → EADDRINUSE); `self-healer status` shows `stopped` under systemd → use `systemctl --user status`
+- [X] T060 Startup ordering — `scripts/start-stack.sh` (written; engages on next cloudflared restart — existing live tunnel left running to keep `SELF_HEALER_URL` valid): readiness loop probing `curl http://127.0.0.1:3457/health` (expect 200; pre-/health fallback `POST …/api/webhook/ci -d '{}'` → 401; abort after 30s), then `cloudflared tunnel --url http://localhost:3457`, print the printed quick-tunnel URL and surface `gh secret set SELF_HEALER_URL <url> -R <owner/repo>` (session-random URL, must re-set on every cloudflared restart)
+- [X] T061 Live verification (plan.md §7) — daemon start + journal ready line; `ss -ltn | grep :3457` + health 200; tunnel path + public 401 probe (existing cloudflared, untouched); HMAC-signed fixture webhook → 202 skipped (ci-fix branch, zero DB writes) + 401 bad secret; `systemctl --user kill -s KILL` → MainPID 32263 → 32454, port refused ~4s (gap), 200 again at t+5s, worker back; same public URL 401 after restart; honest 3s-gap window observed (t+1..t+4 refused). Live re-check 2026-09-20 (PR #4 `live-recheck-1`, run 35514914991) through the systemd daemon + existing tunnel: lint → `lint/format` fix PR #5 (`ci-fix/4d86161b → live-recheck-1`, widget.js diff, verify=passed), flaky → 3 reruns → `flaky_retries_exhausted`, unknown → `no_pattern_match`; comments on all three failing jobs; SOR ok; `/health` stayed 200 throughout
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

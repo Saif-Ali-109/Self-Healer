@@ -4,7 +4,7 @@
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { handleCiWebhook } from "../../src/webhook/server.ts";
+import { handleCiWebhook, handleHealth } from "../../src/webhook/server.ts";
 import {
 	closeTestPool,
 	getTestPool,
@@ -128,5 +128,11 @@ describe.skipIf(!hasDb)("webhook contract (POST /api/webhook/ci)", () => {
 	it("rejects invalid JSON → 400", async () => {
 		const res = await handleCiWebhook(signedHeaders("{not json"), "{not json");
 		expect(res.status).toBe(400);
+	});
+
+	it("GET /health → 200 {ok:true}", () => {
+		const res = handleHealth();
+		expect(res.status).toBe(200);
+		expect(res.body).toEqual({ ok: true });
 	});
 });

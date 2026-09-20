@@ -1,6 +1,6 @@
 # Contract: CI Failure Webhook (GitHub Actions adapter)
 
-**Branch**: `001-self-healer-ci-agent` | **Contract version**: 1.0 | **Plan**: [plan.md](../plan.md)
+**Branch**: `001-self-healer-ci-agent` | **Contract version**: 1.1 | **Plan**: [plan.md](../plan.md)
 
 ## Purpose
 
@@ -13,6 +13,17 @@ Defines the inbound contract: how a CI system notifies the agent of a failed run
 - Content-Type: `application/json`
 - Max payload: 256 KB
 - Auth: `X-Webhook-Secret` header, HMAC-verified with the value of the `CI_WEBHOOK_SECRET` environment variable (secrets never appear in logs or records — constitution §Secrets).
+
+### Readiness endpoint (v1.1)
+
+- Method: `GET`
+- Path: `/health`
+- Auth: none
+- Response: `200 {"ok":true}`
+- Semantics: liveness/readiness contract for supervisors (systemd, cloudflared, uptime
+  checkers). The standalone server binds only after `startDaemon` connects the DB, so a
+  reachable `/health` implies DB readiness. `401`/`404` are *not* readiness signals —
+  they mean "wrong secret" / "unknown route".
 
 ## Canonical normalized event (adapter output — the contract everything downstream consumes)
 

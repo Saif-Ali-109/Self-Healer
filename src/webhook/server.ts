@@ -80,6 +80,16 @@ export async function handleCiWebhook(
 	return { status: 202, body: { ok: true, run_id: result.run_id } };
 }
 
+/**
+ * `GET /health` → 200 {"ok":true}. Liveness/readiness contract for supervisors
+ * (systemd, cloudflared, uptime checkers). No auth, no config needed — the
+ * server is only listening after `startDaemon` connected the DB, so a reachable
+ * /health implies DB readiness.
+ */
+export function handleHealth(): { status: number; body: { ok: boolean } } {
+	return { status: 200, body: { ok: true } };
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
@@ -108,6 +118,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 /**
  * Start the standalone webhook server.
+ * GET /health → 200 {ok:true}
  * POST /api/webhook/ci → verify → map → validate → enqueue → 202/400/401/409
  */
 export async function startWebhookServer(
@@ -115,7 +126,10 @@ export async function startWebhookServer(
 ): Promise<Server> {
 	const server = createServer(
 		async (req: IncomingMessage, res: ServerResponse) => {
-			if (
+			if (req.method === "GET" && (req.url ?? "") === "/health") {
+				const result = handleHealth();
+				sendJson(res, result.status, result.body);
+			} else if (
 				req.method === "POST" &&
 				(req.url ?? "").startsWith("/api/webhook/ci")
 			) {
