@@ -43,6 +43,7 @@ export interface RunAuditRecord {
 		verification_result: string;
 		test_summary: string | null;
 		comment_url: string | null;
+		fix_pr_url: string | null;
 		created_at: number;
 	}>;
 	escalations: Array<{
@@ -53,6 +54,18 @@ export interface RunAuditRecord {
 		comment_url: string | null;
 		created_at: number;
 	}>;
+	/** The agent's reasoning trace: model turns, tool calls, gate results, decisions (SOR chain). */
+	agent_trace: AgentTraceEntry[];
+}
+
+export interface AgentTraceEntry {
+	seq: number;
+	kind: string;
+	tool_name: string | null;
+	payload: Record<string, unknown>;
+	tool_input: unknown;
+	tool_output: unknown;
+	created_at: number;
 }
 
 /** Reconstruct the audit record for one run. Throws if the run does not exist. */
@@ -71,14 +84,14 @@ export async function reconstructRun(
 		throw new Error(`no ci_run with run_id ${runId}`);
 	}
 
-	const [classifications, fixAttempts, escalations] = await Promise.all([
+	const [classifications, fixAttempts, escalations, trace] = await Promise.all([
 		pool.query<RunAuditRecord["classifications"][number]>(
 			`SELECT classification_id, category, confidence, evidence, classifier_version, model, summary, created_at
 			 FROM classifications WHERE run_id = $1 ORDER BY created_at ASC`,
 			[runId],
 		),
 		pool.query<RunAuditRecord["fix_attempts"][number]>(
-			`SELECT attempt_id, pattern_matched, diff, branch, verification_result, test_summary, comment_url, created_at
+			`SELECT attempt_id, pattern_matched, diff, branch, verification_result, test_summary, comment_url, fix_pr_url, created_at
 			 FROM fix_attempts WHERE run_id = $1 ORDER BY created_at ASC`,
 			[runId],
 		),
@@ -87,7 +100,43 @@ export async function reconstructRun(
 			 FROM escalations WHERE run_id = $1 ORDER BY created_at ASC`,
 			[runId],
 		),
+		pool.query<{
+			seq: number;
+			tool_name: string | null;
+			tool_input: string | null;
+			tool_output: string | null;
+			payload: string;
+			created_at: number;
+		}>(
+			`SELECT seq, tool_name, tool_input, tool_output, payload, created_at
+			 FROM audit_events WHERE run_id = $1 ORDER BY seq ASC`,
+			[runId],
+		),
 	]);
+
+	const parse = (t: string | null): unknown => {
+		if (t === null || t === undefined) return null;
+		try {
+			return JSON.parse(t);
+		} catch {
+			return t;
+		}
+	};
+	const agentTrace: AgentTraceEntry[] = [];
+	for (const r of trace.rows) {
+		const payload = (parse(r.payload) ?? {}) as Record<string, unknown>;
+		const kind = String(payload.kind ?? "");
+		if (!kind.startsWith("ci_agent_") && !kind.startsWith("ci_notes_")) continue;
+		agentTrace.push({
+			seq: Number(r.seq),
+			kind,
+			tool_name: r.tool_name,
+			payload,
+			tool_input: parse(r.tool_input),
+			tool_output: parse(r.tool_output),
+			created_at: Number(r.created_at),
+		});
+	}
 
 	return {
 		run_id: runId,
@@ -95,6 +144,7 @@ export async function reconstructRun(
 		classifications: classifications.rows,
 		fix_attempts: fixAttempts.rows,
 		escalations: escalations.rows,
+		agent_trace: agentTrace,
 	};
 }
 
@@ -132,6 +182,8 @@ export function renderRunAuditMarkdown(record: RunAuditRecord): string {
 				`- pattern \`${f.pattern_matched}\` on \`${f.branch}\` → **${f.verification_result}** at ${new Date(f.created_at).toISOString()}`,
 			);
 			if (f.comment_url) lines.push(`  - comment: ${f.comment_url}`);
+			if (f.fix_pr_url)
+				lines.push(`  - fix PR: ${f.fix_pr_url} (human review; never auto-merged)`);
 		}
 		lines.push("");
 	}
@@ -147,10 +199,44 @@ export function renderRunAuditMarkdown(record: RunAuditRecord): string {
 		lines.push("");
 	}
 
+	if (record.agent_trace.length > 0) {
+		lines.push("## Agent reasoning trace");
+		const clip = (v: unknown, n: number): string => {
+			const t = typeof v === "string" ? v : JSON.stringify(v);
+			return (t ?? "").replace(/\s+/g, " ").slice(0, n);
+		};
+		for (const t of record.agent_trace) {
+			const at = new Date(t.created_at).toISOString();
+			const p = t.payload;
+			switch (t.kind) {
+				case "ci_agent_start":
+					lines.push(`- #${t.seq} ${at} **start** ${clip({ provider: p.provider, model: p.model, origin: p.origin, cycle: p.cycle, test_command: p.test_command }, 300)}`);
+					break;
+				case "ci_agent_reasoning":
+					lines.push(`- #${t.seq} ${at} **model** (step ${String(p.step)}): ${clip(p.text, 600) || "(tool call only)"}${Array.isArray(p.tool_calls) && p.tool_calls.length ? ` → ${p.tool_calls.join(", ")}` : ""}`);
+					break;
+				case "ci_agent_tool":
+					lines.push(`- #${t.seq} ${at} **tool ${t.tool_name}** ${clip(t.tool_input, 200)} → ${clip(t.tool_output, 200)}`);
+					break;
+				case "ci_agent_gate":
+					lines.push(`- #${t.seq} ${at} **gate** ${p.passed ? "PASSED" : "FAILED"}: ${clip(p.summary, 200)}`);
+					break;
+				case "ci_agent_decision":
+					lines.push(`- #${t.seq} ${at} **decision ${String(p.decision)}**: ${clip(p.root_cause ?? p.reason, 300)}`);
+					if (p.rationale) lines.push(`  - rationale: ${clip(p.rationale, 800)}`);
+					break;
+				default:
+					lines.push(`- #${t.seq} ${at} **${t.kind}** ${clip(p, 300)}`);
+			}
+		}
+		lines.push("");
+	}
+
 	if (
 		record.classifications.length === 0 &&
 		record.fix_attempts.length === 0 &&
-		record.escalations.length === 0
+		record.escalations.length === 0 &&
+		record.agent_trace.length === 0
 	) {
 		lines.push("_No decisions recorded yet for this run._", "");
 	}

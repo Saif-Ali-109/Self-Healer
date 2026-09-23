@@ -21,7 +21,16 @@ export function buildFixPrTitle(externalRunId: string): string {
 
 export interface FixPrBodyInput {
 	externalRunId: string;
-	pattern: string;
+	/** Legacy allowlist pattern name (v1.x fixers). Omitted for AI-agent fixes. */
+	pattern?: string;
+	/** AI-agent extras (all optional so legacy callers/tests are unaffected). */
+	rootCause?: string;
+	summary?: string;
+	reasoning?: string;
+	model?: string;
+	cycle?: number;
+	maxCycles?: number;
+	warnings?: string[];
 	branch: string;
 	baseBranch: string;
 	diffSummary: string;
@@ -30,12 +39,27 @@ export interface FixPrBodyInput {
 
 /** Human-readable fix PR body — review-first; the agent never merges. */
 export function buildFixPrBody(opts: FixPrBodyInput): string {
-	return [
+	const lines = [
 		"## 🤖 Self-Healer: automated fix",
 		"",
 		`This PR was opened automatically for failing CI run \`#${opts.externalRunId}\`.`,
 		"",
-		`**Pattern matched**: \`${opts.pattern}\``,
+		...(opts.rootCause ? [`**Root cause**: ${opts.rootCause}`, ""] : []),
+		...(opts.pattern ? [`**Pattern matched**: \`${opts.pattern}\``, ""] : []),
+		...(opts.summary ? [`**What changed**: ${opts.summary}`, ""] : []),
+		...(opts.reasoning
+			? [`**Agent reasoning**: ${opts.reasoning.slice(0, 1200)}`, ""]
+			: []),
+		...(opts.cycle !== undefined && opts.cycle > 0
+			? [
+					`**Re-fix cycle**: ${opts.cycle} of ${opts.maxCycles ?? "?"} (an earlier fix on this branch did not make CI pass)`,
+					"",
+				]
+			: []),
+		...(opts.model ? [`**Model**: \`${opts.model}\``, ""] : []),
+		...(opts.warnings && opts.warnings.length > 0
+			? [...opts.warnings.map((w) => `> ⚠️ ${w}`), ""]
+			: []),
 		`**Branch**: \`${opts.branch}\``,
 		`**Base**: \`${opts.baseBranch}\``,
 		`**Diff summary**: ${opts.diffSummary}`,
@@ -43,6 +67,7 @@ export function buildFixPrBody(opts: FixPrBodyInput): string {
 		"",
 		"> The agent never merges. Review, approve, and merge when ready.",
 	].join("\n");
+	return lines;
 }
 
 export interface OpenFixPrInput {
@@ -51,7 +76,14 @@ export interface OpenFixPrInput {
 	externalRunId: string;
 	headBranch: string;
 	baseBranch: string;
-	pattern: string;
+	pattern?: string;
+	rootCause?: string;
+	summary?: string;
+	reasoning?: string;
+	model?: string;
+	cycle?: number;
+	maxCycles?: number;
+	warnings?: string[];
 	diffSummary: string;
 	verification: string;
 }
@@ -74,6 +106,9 @@ export async function openFixPr(
 	) {
 		return null;
 	}
+	// A PR needs a distinct base: re-fix cycles fail on the same ci-fix branch,
+	// so those falls back to branch + comment (never a head==base PR).
+	if (opts.headBranch === opts.baseBranch) return null;
 	const MAX_ATTEMPTS = 3;
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 		try {
@@ -89,6 +124,13 @@ export async function openFixPr(
 			const body = buildFixPrBody({
 				externalRunId: opts.externalRunId,
 				pattern: opts.pattern,
+				rootCause: opts.rootCause,
+				summary: opts.summary,
+				reasoning: opts.reasoning,
+				model: opts.model,
+				cycle: opts.cycle,
+				maxCycles: opts.maxCycles,
+				warnings: opts.warnings,
 				branch: opts.headBranch,
 				baseBranch: opts.baseBranch,
 				diffSummary: opts.diffSummary,

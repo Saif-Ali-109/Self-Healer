@@ -2,7 +2,7 @@
 	"name": "self-healer-ci-agent",
 	"version": "1.1.0",
 	"type": "module",
-	"description": "CI failure agent: classify flaky/real_bug/infra, retry flaky, auto-fix allowlisted bugs on a branch, escalate with comments, tamper-evident audit.",
+	"description": "AI CI repair agent: classify flaky/real_bug/infra, retry flaky, diagnose + fix real failures with an LLM (Gemini/OpenRouter/Ollama), verify with the full suite, push to a ci-fix branch, learn per-repo notes, tamper-evident audit.",
 	"bin": {
 		"self-healer": "bin/self-healer.mjs"
 	},
@@ -21,7 +21,7 @@
 		"build": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/self-healer.mjs && esbuild src/daemonEntry.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/daemon.mjs",
 		"prepack": "npm run build",
 		"start": "tsx --env-file-if-exists=.env src/index.ts",
-		"cli": "tsx src/cli/index.ts",
+		"cli": "tsx --env-file-if-exists=.env src/cli/index.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
@@ -31,8 +31,11 @@
 		"migrate:down": "tsx --env-file-if-exists=.env src/db/migrate.ts down",
 		"sor:verify": "tsx --env-file-if-exists=.env src/sor/verifyCli.ts",
 		"sor:amend": "tsx --env-file-if-exists=.env scripts/record-constitution-amendment.ts",
+		"sor:amend:v2": "tsx --env-file-if-exists=.env scripts/record-constitution-amendment-v2.ts",
+		"sor:amend:v3": "tsx --env-file-if-exists=.env scripts/record-constitution-amendment-v3.ts",
 		"sor:repair": "tsx --env-file-if-exists=.env src/sor/repairCli.ts",
-		"audit:run": "tsx --env-file-if-exists=.env src/audit/reconstruct.ts"
+		"audit:run": "tsx --env-file-if-exists=.env src/audit/reconstruct.ts",
+		"llm:probe": "tsx --env-file-if-exists=.env scripts/probe-llm.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.10",

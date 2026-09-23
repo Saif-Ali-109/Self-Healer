@@ -9,11 +9,23 @@ Fully standalone Node.js daemon: persistence via `node:sqlite` (built into Node 
 git worktrees for isolated fixes, and the SOR audit chain stored in SQLite. No Fleet
 clone, no PostgreSQL server, no runtime dependencies beyond Node itself.
 
-Governed by the project [Constitution v1.3.0](.specify/memory/constitution.md), which caps the
-agent's autonomy: ≤ 3 LLM calls per failure, ≤ 3 flaky reruns, ≥ 0.7 confidence to fix, a
-10-minute budget per run, a single FIFO worker, and branch + comment delivery only.
+Governed by the project [Constitution v3.0.0](.specify/memory/constitution.md), which caps the
+agent's autonomy: ≤ 40 LLM calls / ≤ 80 tool calls / 20 minutes per run, ≤ 3 flaky reruns,
+≥ 0.7 confidence to fix, a single FIFO worker, and best-effort fix-PR delivery
+(falls back to branch + comment; the agent never merges).
 
 ---
+
+## 🧠 AI agent upgrade (v2)
+
+Self-Healer now diagnoses and fixes **any** CI failure with an LLM tool-calling agent
+(Gemini, OpenRouter or Ollama — chosen globally and/or per repo in
+`self-healer.config.json`), verifies with the **full test suite**, pushes to
+`ci-fix/<run-id>` and opens a best-effort **fix-only PR** for human review (never merged,
+falls back to branch + comment), re-fixes if CI still fails (capped,
+default 3), and remembers per-repo notes. Details: [docs/UPGRADE.md](docs/UPGRADE.md) ·
+deployment on a VPS with systemd: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) ·
+example config: `self-healer.config.example.json`.
 
 ## Pipeline
 
@@ -27,8 +39,8 @@ GitHub Actions webhook  ──▶  POST /api/webhook/ci   (HMAC-verified)
    worktree at failing commit  ──▶  classify (rule-first: flaky / infra / real_bug ≥ 0.7)
         │
         ├── flaky      ──▶  rerun ≤ 3× via `gh api` → resolved + comment  |  escalate (flaky_retries_exhausted)
-        ├── real_bug   ──▶  allowlist pattern match → apply fix → verify in worktree
-        │                  →  open ci-fix/<run-id> fix PR → human approves & merges  |  escalate
+        ├── real_bug   ──▶  AI agent fixes in worktree → gate (full suite) → push ci-fix/<run-id>
+        │                  →  best-effort fix-only PR (fallback: branch + comment) → human merges  |  escalate
         └── infra      ──▶  escalate (infra)
 ```
 
@@ -38,19 +50,19 @@ append-only SOR hash chain in SQLite (`npm run sor:verify` proves tamper-freenes
 
 ---
 
-## Constitution guardrails (v1.3.0)
+## Constitution guardrails (v3.0.0)
 
 | Guardrail | Enforcement |
 |-----------|-------------|
 | Classification is rule-augmented, evidence recorded | regex signals + confidence in SOR, never silent |
-| Only allowlisted patterns are auto-fixed | anything else escalates (`no_pattern_match`) |
-| ≤ 3 LLM calls / failure | `PipelineBudget` + constants; LLM is optional enrichment |
+| The AI agent fixes any CI failure (bounded) | `PipelineBudget` + `maxLlmCalls`/`maxToolCalls`/time limits; other paths escalate |
+| ≤ 40 LLM calls / ≤ 80 tool calls / 20 min per run | `PipelineBudget` + `AgentLimits`, configurable per repo |
 | ≤ 3 flaky reruns | `MAX_RERUNS` hard cap |
 | ≥ 0.7 confidence to fix | classifier thresholds |
 | One fix attempt per run | DB unique `uq_fix_attempts_run` |
 | Never touch protected branches | `main` / `release/*` / `v*` are never auto-fixed |
 | Never edit CI definition files | e.g. `.github/workflows/*` are out of fix scope |
-| Robot never merges | fixes ship as PRs; a human reviews and merges |
+| Robot never merges | fixes ship as best-effort PRs or branch + comment; a human reviews and merges |
 | Tamper-evident audit | SOR hash chain in SQLite (verified on every `sor:verify`) |
 
 Webhooks from the agent's own `ci-fix/*` branches are ignored, and only repositories that
@@ -61,11 +73,12 @@ on its own output.
 
 ## Fix patterns
 
-The fix-scope allowlist (`src/pipeline/fixscope/allowlist.ts`) ships **two active patterns**
-and two post-MVP stubs:
+The fix-scope allowlist (`src/pipeline/fixscope/allowlist.ts`) ships **three active patterns**
+(a general LLM repair agent plus two deterministic fixers) and two post-MVP stubs:
 
 | Pattern | Detection | Fix | Verification |
 |---------|-----------|-----|--------------|
+| `ai-agent` | any real bug within scope after rule-first classification `real_bug` | LLM tool-calling agent diagnoses + fixes in one worktree | full suite green (`npm test: passed` → gate) |
 | `lint/format` | biome / eslint / prettier diagnostics | auto-format the offending file(s) | `npx @biomejs/biome check .` |
 | `import/type` | `ReferenceError: X is not defined` | add the single import line for `X`, sourced from the sole exporter file | `node src/main.mjs` (repo convention) |
 | `snapshot` | — (stub, post-MVP) | — | — |
@@ -92,13 +105,15 @@ never guesses.
 
 ## Delivery: approve-then-fix
 
-1. A failing job matches an allowlisted pattern.
-2. The agent applies exactly one fix in a worktree at the failing commit and verifies it.
-3. The fix is pushed to `ci-fix/<run-id>` (based on the *failing* branch) and surfaced as a
-   **fix-only pull request** titled `🤖 Self-Healer: auto-fix for CI run #<run-id>`.
-4. A comment is posted on the failing PR/run with root cause, pattern, diff summary,
-   verification output, and the fix-PR link.
-5. **A human reviews and merges.** The agent never merges — not even its own PRs — and
+1. A failing job is classified `real_bug` (rule-first, ≥ 0.7) and handed to the repair agent.
+2. The agent fixes it in a worktree at the failing commit; the **full test suite** must pass.
+3. The fix is pushed to `ci-fix/<run-id>` (based on the *failing* branch) — never forced.
+4. A **best-effort fix-only PR** opens from `ci-fix/<run-id>` to the failing branch, titled
+   `🤖 Self-Healer: auto-fix for CI run #<run-id>`. If it can't open (network, cross-fork
+   commit, permissions, head == base), delivery falls back to the branch + CI comment.
+5. A comment is posted on the failing run with root cause, reasoning, diff summary,
+   verification output, and the fix-PR link when one was opened.
+6. **A human reviews and merges.** The agent never merges — not even its own PRs — and
    `ci-fix/*` webhook events are dropped so the agent never reacts to its own branches.
 
 ---
@@ -180,7 +195,7 @@ before — the team just stops getting pinged on every flaky rerun.
 ```bash
 cp .env.example .env            # fill in REAL values (never commit .env)
 npm install
-npm run migrate:up              # applies migrations 001–023
+npm run migrate:up              # applies migrations 001–024
 npm start                       # webhook listener + single-worker daemon
 ```
 
@@ -278,7 +293,7 @@ src/
     fixscope/       allowlist + lintfixer + importfixer (pure detection layers + shell drivers)
     escalation/     reasons → suggested next steps, DB + SOR chaining
   audit/            run reconstruction for auditing
-  db/               SQLite wrapper + migration runner (migrations 001–023)
+  db/               SQLite wrapper + migration runner (migrations 001–024)
   cli/              self-healer commands: init / enable / start / stop / status
   sor/              HMAC-SHA256 hash chain (verify / repair CLIs)
 specs/001-self-healer-ci-agent/
@@ -300,10 +315,49 @@ running on its own daemon:
 | `import` | `ReferenceError: renderWidget is not defined` | auto-fix → **PR #34**, verified with `node src/main.mjs` (exit 0) | merged by human → job passes |
 | `flaky` | hardcoded intermittent failure | 3 reruns → escalate `flaky_retries_exhausted` | comment posted, by design |
 | `unknown` | hardcoded demo error | no allowlisted pattern → escalate `no_pattern_match` | comment posted, by design |
+| `test` | `multiply(2, 3)` returned `5` (`src/calc.js` shipped `return a + b`) | **AI agent** diagnosed & fixed → **PR #40** (`ci-fix/97df1109`), verified `npm test` | open for human merge (never auto-merged) |
 
 The demo also proved: one clean handling cycle per failure (exactly one comment + one PR per
 run), no duplicate comments, no comments on `ci-fix/*` PRs, and pattern-aware root-cause
 lines in fix comments (`**Pattern matched**: import/type`).
+
+### 🎉 First AI-agent auto-fix delivered: PR #40
+
+The milestone run that took the whole pipeline **live end-to-end with the LLM repair agent** —
+a real regression was planted in `src/calc.js` (`multiply` returned `a + b`), CI failed on
+`npm test`, and the daemon went through the entire loop unattended:
+
+| Time (UTC) | Elapsed | Stage |
+|-----------|---------|-------|
+| `14:08:56` | — | webhook received, `ci_runs` row created |
+| `14:09:02` | 6 s | classified `real_bug` (confidence 0.9) |
+| `14:09:06` | 10 s | agent loop starts (`groq/gpt-oss-120b`) |
+| `14:09:06 → 14:10:30` | ~84 s | 7 tool-loop steps: diagnose → `edit_file` → `run_command npm test` |
+| `14:10:33` | — | fix verified (`npm test: passed`), SOR notes written |
+| `14:10:40` | **1 min 44 s** | **resolved → PR #40 opened** |
+
+**The fix landed as PR #40** — <https://github.com/Saif-Ali-109/demo-repo/pull/40>
+(base `demo-real-bugs`, head `ci-fix/97df1109`, one file `src/calc.js`):
+
+```diff
+ function multiply(a, b) {
+-  return a + b; // BUG: should be `return a * b`
++  return a * b;
+ }
+```
+
+Recorded in the SOR chain (decision `finish_accepted`, confidence 1): root cause *"multiply
+returned the sum of its arguments rather than the product"*, verification `npm test: passed`.
+Per the constitution the fix-only PR is **open for human review and merge** (the robot never
+merges) and a comment carrying root cause + reasoning + verification was posted back on the
+failing run (PR #39 thread, `issuecomment-5796381118`).
+
+Why it one-shot in under two minutes: the context window stayed tiny across the whole loop
+(2,595 → 3,355 input tokens — far under every Groq free-tier cap), the worktree was clean
+(`.gitignore`d `node_modules`/`package-lock`), and the test script ran the unambiguous bare
+`node --test` form. Note the lab config widens `pipelineBudgetMs` to 40 min purely as
+free-tier request-pacing headroom; providers that stay within per-minute caps still finish in
+~1–3 min.
 
 ---
 
@@ -322,7 +376,10 @@ lines in fix comments (`**Pattern matched**: import/type`).
   and recovers after restore.
 - **Live**: webhook → worktree → classify → fix → verify → fix PR → human merge cycle and
   the flaky-rerun → escalate and no-pattern → escalate cycles all observed against live
-  GitHub Actions runs.
+  GitHub Actions runs. First full **AI-agent** delivery: run `97df1109` on `Saif-Ali-109/demo-repo`
+  — classified `real_bug`, fixed the planted `multiply` bug in `src/calc.js`, verified
+  `npm test`, pushed `ci-fix/97df1109`, opened **PR #40**, commented back on the failing run —
+  **webhook → PR in 1 min 44 s** on `groq/gpt-oss-120b`.
 
 ---
 

@@ -1,5 +1,9 @@
 <!--
 Sync Impact Report
+- Version change: 2.0.0 → 3.0.0 (MAJOR: principle V redefined — a verified fix MAY be surfaced as a best-effort **fix-only pull request** from `ci-fix/<run-id>` to the failing branch for human review; PR open failure falls back to branch + comment; the agent still NEVER merges and NEVER touches protected branches) — explicitly approved by the project owner. Record with `npm run sor:amend:v3`.
+- Version change: 1.3.0 → 2.0.0 (MAJOR: III allowlist + single attempt removed; V fix-PR removed; LLM cap replaced) — approved by the project owner via the upgrade spec (docs/UPGRADE.md). Record with `npm run sor:amend:v2`.
+- Modified principles: III (Fix-Scope Guardrail → AI fixes for any CI failure, verified by the FULL suite), IV (audit now includes the agent's reasoning trace), V (push to ci-fix branch + CI comment ONLY; never a PR, never a merge)
+- Added: bounded re-fix loop; per-repo learning notes; provider selection (Gemini/OpenRouter/Ollama) global + per repo
 - Version change: 1.1.0 → 1.2.0 (MINOR: principle V expanded — a verified auto-fix MAY now be surfaced as a fix-only pull request for human review; the agent still never merges)
 - Modified principles: V (Human-Approved Delivery — expanded)
 - Added sections: none
@@ -22,22 +26,24 @@ The agent MUST ingest failures from any CI system through a generic webhook list
 ### II. Rule-Augmented Classification (NON-NEGOTIABLE)
 Every failure MUST be classified as `flaky`, `real_bug`, or `infra`, using rule-augmented signals rather than pure LLM judgment. Flaky signals: same test passed on a previous run of the same commit/branch, known flaky-test history, or timing/race patterns (timeout, connection reset, non-deterministic order). Infra signals: known infra patterns (rate limit, disk full, docker pull failure, expired credentials). Real bug: everything else. Each classification MUST record its evidence and confidence in the SOR hash-chain. No silent decisions are permitted.
 
-### III. Fix-Scope Guardrail (NON-NEGOTIABLE)
-Auto-fix MUST only be attempted for the fixable-pattern allowlist: (1) outdated snapshot/golden file mismatches, (2) missing/incorrect import or type error with an obvious single-line fix, (3) test timeout too low for a legitimately slower operation, (4) lint/formatting failures. Anything outside the allowlist MUST escalate — never guess; an unvalidated fix is worse than no fix. A maximum of ONE auto-fix attempt is permitted per failure.
+### III. Verified, Bounded AI Fixes (NON-NEGOTIABLE)
+The agent MAY attempt to fix ANY bug causing CI to fail (logic, types, tests, dependencies), using an LLM tool-calling loop confined to an isolated worktree. No fix is ever pushed unless the FULL test suite (plus any configured checks) passes in that worktree — regardless of bug type — and the diff passes the guardrails: no deleted/skipped tests, no CI-config edits, no secrets, fewer than the configured file cap, self-reported confidence ≥ 0.7. If CI still fails on the pushed `ci-fix/*` branch the same pipeline runs again, up to a configurable cap (default THREE re-fix cycles) per branch; beyond that the agent MUST escalate. Unverifiable (no test command) or unsure ⇒ escalate; an unvalidated fix is worse than no fix.
 
 ### IV. Tamper-Evident Auditability
 Every decision (classification, retry, fix attempt, escalation) MUST be appended to the SOR hash-chain (stored in SQLite) with the evidence used (logs read, pattern matched, confidence, model, run IDs). The agent's behavior MUST remain fully auditable end-to-end.
 
 ### V. Human-Approved Delivery
-The agent MUST NOT open pull requests for unverified content and MUST NEVER merge anything. For a VERIFIED auto-fix, the agent MAY open a single fix-only pull request (from the reusable `ci-fix/<run-id>` branch to the failing branch) so a human can review and approve it through the platform's normal PR flow, and MAY reference that PR in the CI run comment alongside the root cause, branch name, diff summary, and test results. Escalations are posted as CI run comments with root-cause summary and suggested next step. A human always reviews before any change reaches the critical path; the agent never pushes to protected branches.
+The agent MUST NEVER merge anything. A VERIFIED fix is pushed (never forced) to the `ci-fix/<run-id>` branch and reported in a CI run comment with root cause, reasoning, diff summary, test results and reviewer warnings (dependency changes, edited tests). The fix MAY additionally be surfaced as a **fix-only pull request** from `ci-fix/<run-id>` to the failing branch for normal GitHub review. PR opening is BEST-EFFORT: if it fails (network, cross-fork commit, permissions, head equals base) delivery falls back to branch + comment and never blocks the fix. Escalations are CI run comments with root-cause summary and suggested next step. Protected branches (`main`, `release/*`, `v*`) are never touched. A human always reviews and merges before any change reaches the critical path.
 
 ## Operating Constraints
 
-- **LLM access**: Optional enrichment; classifier is rule-first. Hard cap of THREE model calls per failure pipeline; exhaustion triggers immediate escalation with available evidence.
+- **LLM access**: Only Gemini, OpenRouter and Ollama; selectable globally and per repo (self-healer.config.json). The classifier stays rule-first; the agent runs after it. Per-run budgets (model calls, tool calls, time, re-fix cycles) are configurable with safe defaults; exhaustion escalates with available evidence.
+- **Memory**: The agent's reasoning trace is chained in the SOR log; durable per-repo learning notes live in `repo_notes` and are treated as untrusted hints.
+- **Sandboxing**: Repo commands run without a shell, from an allowlist, with a scrubbed environment, timeouts and worktree-confined files; operators SHOULD add an OS-level wrapper for untrusted repos.
 - **Persistence**: `node:sqlite` (built into Node 22+, zero extra dependencies). Four tables — `ci_runs`, `classifications`, `fix_attempts`, `escalations` — plus an append-only audit-events table forming the SOR hash chain. All records chained within the SQLite database; no external database server required.
 - **Secrets**: All secrets (GitHub tokens, webhook secrets, API keys) MUST come from environment variables. Never committed, never logged. `.env.example` documents every required variable; the real `.env` MUST be gitignored.
 - **Concurrency**: Single worker with a FIFO queue. One CI failure is processed at a time; all others wait.
-- **Time budget**: Total pipeline budget of TEN minutes per failure, from webhook receipt to resolution (fix, retry, or escalation). On timeout, stop and escalate with partial evidence.
+- **Time budget**: Total pipeline budget of a configurable time budget (default TWENTY minutes) per failure, from webhook receipt to resolution (fix, retry, or escalation). On timeout, stop and escalate with partial evidence.
 - **Fix scope**: May touch any file in the repository (full-repo scope), but every change is human-review-gated.
 - **Worktrees**: Each role runs in an isolated child-process worker with cwd-locked tool access to its own worktree. Worktrees are created and cleaned up via direct `git worktree` shell calls.
 
@@ -45,17 +51,17 @@ The agent MUST NOT open pull requests for unverified content and MUST NEVER merg
 
 - **Flaky classification**: Retry Runner reruns the job up to THREE times. Still failing → escalate.
 - **Infra classification**: Escalate immediately as an infra issue; no fix attempted.
-- **Real bug classification**: Proceed to the fix-scope guardrail for allowlist matching.
+- **Real bug classification**: Hand off to the AI agent (III).
 - **Confidence**: Classification confidence MUST be ≥ 0.7 to proceed with auto-fix. Below 0.7, default to escalate.
 - **Escalation triggers (MUST escalate, MUST NOT fix, when ANY holds)**:
-  1. Classifier confidence < 0.7
-  2. A fix attempt was already made and failed
-  3. Failure involves 5 or more files
+  1. The agent's self-reported confidence < 0.7
+  2. The re-fix cap for the branch was reached
+  3. The fix would touch the configured file cap or more
   4. Failure is on a critical branch: `main` or any `release/*` / `v*` tag
   5. LLM or time budget exhausted
-  6. Failure does not match the fixable-pattern allowlist
-- **Fix verification**: Run only the affected test(s) plus a subset of the full suite. Fix failing → escalate, no second attempt.
-- **Fix delivery**: A successful fix is pushed to the `ci-fix/<run-id>` branch and surfaced as a fix-only PR (ci-fix → failing branch) for human review, with the PR link in the CI run comment. The agent never merges.
+  6. No test command / no usable LLM provider / a guardrail violation
+- **Fix verification**: The full suite (plus `verifyCommands`) must pass in the worktree before any push. A failing gate is fed back to the agent within its budget; never pushed.
+- **Fix delivery**: A successful fix is pushed to the `ci-fix/<run-id>` branch with a CI comment, and MAY be surfaced as a best-effort fix-only PR to the failing branch for human review; the agent never merges.
 
 ## Development Workflow
 
@@ -90,7 +96,7 @@ self-healer start       # daemon on CI_WEBHOOK_PORT (default :3457)
 ### What the package includes
 
 - Webhook listener + single FIFO worker daemon
-- `node:sqlite` database (built into Node 22+) with migrations 001–022
+- `node:sqlite` database (built into Node 22+) with migrations 001–024
 - Direct `git worktree` calls (no Fleet import)
 - SOR append-only hash chain inside SQLite
 - All fix patterns (active + stubs)
@@ -110,4 +116,4 @@ self-healer start       # daemon on CI_WEBHOOK_PORT (default :3457)
 - LLM enrichment beyond the rule-first classifier
 - Standalone demo-repo re-run (re-run after packaging completes)
 
-**Version**: 1.3.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-19
+**Version**: 3.0.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-21

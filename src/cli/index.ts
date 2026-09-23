@@ -8,6 +8,7 @@
 import { parseCliArgs } from "./args.ts";
 import { cliEnable } from "./enable.ts";
 import { cliInit } from "./init.ts";
+import { cliLlm, cliNotes } from "./agent.ts";
 import { cliStart } from "./start.ts";
 import { cliStatus } from "./status.ts";
 import { cliStop } from "./stop.ts";
@@ -24,9 +25,19 @@ Usage:
                                       (default: detached, logs to data/self-healer.log)
   self-healer stop                    stop the daemon (reads data/self-healer.pid)
   self-healer status                  show database, pending queue, watched repos, SOR chain
+  self-healer llm show [--repo o/r]   show which provider/model a repo will use (and why)
+  self-healer llm ping [--repo o/r]   send one tiny request to that provider/model
+  self-healer notes list --repo o/r [--all]
+                                      show the agent's learned notes for a repo
+  self-healer notes add --repo o/r --text "..." [--kind gotcha]
+                                      teach the agent something (human notes rank highest)
+  self-healer notes retire --id <note-id>
+                                      stop using a note
 
 Env (from .env — see .env.example):
-  GH_TOKEN, CI_WEBHOOK_SECRET, DATABASE_URL, SOR_SIGNING_KEY, CI_WEBHOOK_PORT`);
+  GH_TOKEN, CI_WEBHOOK_SECRET, DATABASE_URL, SOR_SIGNING_KEY, CI_WEBHOOK_PORT,
+  GEMINI_API_KEY / OPENROUTER_API_KEY / OLLAMA_BASE_URL
+Settings: self-healer.config.json (or $SELF_HEALER_CONFIG) — see self-healer.config.example.json`);
 }
 
 function fail(message: string): never {
@@ -34,9 +45,8 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
-const { command, force, foreground, repo, repoValid } = parseCliArgs(
-	process.argv.slice(2),
-);
+const cli = parseCliArgs(process.argv.slice(2));
+const { command, force, foreground, repo, repoValid } = cli;
 
 switch (command) {
 	case "init":
@@ -57,6 +67,19 @@ switch (command) {
 		break;
 	case "status":
 		await cliStatus();
+		break;
+	case "llm":
+		await cliLlm(cli.sub, repo, repoValid);
+		break;
+	case "notes":
+		await cliNotes(cli.sub, {
+			repo,
+			repoValid,
+			text: cli.flag("text"),
+			kind: cli.flag("kind"),
+			id: cli.flag("id"),
+			all: process.argv.includes("--all"),
+		});
 		break;
 	case "help":
 	case "--help":

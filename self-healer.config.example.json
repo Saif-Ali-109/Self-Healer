@@ -1,0 +1,29 @@
+{
+  "llm": { "provider": "gemini", "model": "gemini-2.5-pro" },
+
+  "agent": {
+    "maxFixCycles": 3,
+    "maxLlmCalls": 40,
+    "maxToolCalls": 80,
+    "pipelineBudgetMs": 1200000,
+    "maxFilesChanged": 5,
+    "commandTimeoutMs": 300000,
+    "gateTimeoutMs": 600000,
+    "commandWrapper": []
+  },
+
+  "repos": {
+    "*": {},
+    "acme/*": { "llm": { "provider": "openrouter", "model": "your/model-slug" } },
+    "acme/web": {
+      "llm": { "provider": "groq", "model": "openai/gpt-oss-120b" },
+      "testCommand": "npm test"
+    },
+    "acme/api": {
+      "llm": { "provider": "ollama", "model": "qwen3-coder:30b" },
+      "testCommand": "pnpm test",
+      "verifyCommands": ["pnpm run lint", "pnpm run typecheck"],
+      "maxFixCycles": 2
+    }
+  }
+}

@@ -1,5 +1,6 @@
 # Agent tooling (not pushed)
 .opencode/
+opencode.jsonc
 
 # Cloned dependency repo
 fleet/

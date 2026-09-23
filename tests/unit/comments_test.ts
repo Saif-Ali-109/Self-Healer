@@ -33,10 +33,11 @@ describe("buildFixCommentBody", () => {
 		const body = buildFixCommentBody(opts);
 		expect(body).toContain("**Branch**: `ci-fix/01234567`");
 		expect(body).not.toContain("**Pull request**");
+		expect(body).toContain("no PR was opened and nothing was merged");
 		expect(body).toContain("Review and merge at your discretion");
 	});
 
-	it("includes the fix PR review link when one was opened (v1.2.0)", () => {
+	it("includes the fix PR review link when one was opened (v3.0.0)", () => {
 		const body = buildFixCommentBody({
 			...opts,
 			fixPrUrl: "https://github.com/acme/widget/pull/99",
@@ -45,5 +46,7 @@ describe("buildFixCommentBody", () => {
 			"**Pull request**: https://github.com/acme/widget/pull/99 — review & merge when ready.",
 		);
 		expect(body).toContain("The agent never merges");
+		// The "no PR was opened" wording must not leak into PR delivery comments.
+		expect(body).not.toContain("no PR was opened");
 	});
 });

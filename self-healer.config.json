@@ -1,0 +1,15 @@
+{
+  "llm": {
+    "provider": "groq",
+    "model": "openai/gpt-oss-120b"
+  },
+  "agent": {
+    "maxFixCycles": 1,
+    "maxLlmCalls": 20,
+    "pipelineBudgetMs": 2400000,
+    "maxContextChars": 10000
+  },
+  "repos": {
+    "*": {}
+  }
+}

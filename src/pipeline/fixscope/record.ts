@@ -24,6 +24,11 @@ export async function recordFixAttempt(
 		verificationResult: FixVerificationResult;
 		testSummary?: string;
 		commentUrl?: string;
+		/** Agent-era context (used to brief re-fix cycles). */
+		rootCause?: string;
+		summary?: string;
+		filesChanged?: string[];
+		model?: string;
 	},
 ): Promise<FixAttemptRecord> {
 	const record: FixAttemptRecord = {
@@ -40,12 +45,16 @@ export async function recordFixAttempt(
 	// Persist to fix_attempts (UNIQUE on run_id enforces 1 attempt)
 	try {
 		await pool.query(
-			`INSERT INTO fix_attempts (run_id, pattern_matched, diff, branch, verification_result, test_summary, comment_url, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+			`INSERT INTO fix_attempts (run_id, pattern_matched, diff, branch, verification_result, test_summary, comment_url, root_cause, summary, files_changed, model, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
        ON CONFLICT (run_id) DO UPDATE SET
          verification_result = EXCLUDED.verification_result,
          test_summary = EXCLUDED.test_summary,
-         comment_url = EXCLUDED.comment_url`,
+         comment_url = EXCLUDED.comment_url,
+         root_cause = COALESCE(EXCLUDED.root_cause, fix_attempts.root_cause),
+         summary = COALESCE(EXCLUDED.summary, fix_attempts.summary),
+         files_changed = COALESCE(EXCLUDED.files_changed, fix_attempts.files_changed),
+         model = COALESCE(EXCLUDED.model, fix_attempts.model)`,
 			[
 				opts.runId,
 				opts.patternMatched,
@@ -54,6 +63,10 @@ export async function recordFixAttempt(
 				opts.verificationResult,
 				opts.testSummary ?? null,
 				opts.commentUrl ?? null,
+				opts.rootCause ?? null,
+				opts.summary ?? null,
+				opts.filesChanged ? opts.filesChanged.join("\n") : null,
+				opts.model ?? null,
 			],
 		);
 	} catch (err) {

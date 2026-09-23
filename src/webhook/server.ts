@@ -59,18 +59,25 @@ export async function handleCiWebhook(
 	if ("error" in validated)
 		return { status: 400, body: { error: validated.error } };
 
-	// Guard: never re-process events from the agent's own ci-fix/* branches.
-	// Opening a fix PR triggers CI on the fix branch; those failures are the
-	// agent's own scaffolding (e.g. demo flaky/unknown jobs), not the user's.
+	// ci-fix/* branches are the agent's own. A failure there is CI's verdict on a
+	// fix we pushed → it feeds the re-fix loop (bounded by the escalation cap).
+	// Only branches the agent actually pushed are accepted; any other ci-fix/*
+	// name (a human's branch, a demo job) is ignored as before.
+	const pool = getPool();
 	if (validated.branch.startsWith("ci-fix/")) {
-		console.log(
-			`[webhook] ignoring event for agent branch ${validated.branch}`,
+		const known = await pool.query(
+			"SELECT 1 FROM ci_runs WHERE repo = $1 AND fix_branch = $2 LIMIT 1",
+			[validated.repo, validated.branch],
 		);
-		return { status: 202, body: { ok: true, skipped: "agent branch" } };
+		if ((known.rowCount ?? 0) === 0) {
+			console.log(
+				`[webhook] ignoring event for unknown agent branch ${validated.branch}`,
+			);
+			return { status: 202, body: { ok: true, skipped: "agent branch" } };
+		}
 	}
 
 	// Enqueue (dedupe via unique index)
-	const pool = getPool();
 	const queue = new CiQueue(pool);
 	const result = await queue.enqueue(validated);
 

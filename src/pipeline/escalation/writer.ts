@@ -25,6 +25,16 @@ const NEXT_STEPS: Record<EscalationReason, string> = {
 		"Flaky failure persisted after 3 reruns. The test may need to be fixed or skipped.",
 	checkout_failed:
 		"Could not check out the failing commit. Verify the repository and commit SHA are valid.",
+	retry_cap_exceeded:
+		"The agent pushed fixes to the ci-fix branch but CI kept failing and the re-fix cap was reached. Review the ci-fix branch history and the agent's notes, then fix manually.",
+	agent_gave_up:
+		"The agent investigated and decided it could not fix this safely. Its rationale is in the audit trail (`npm run audit:run <run-id>`); use it as a starting point.",
+	llm_unavailable:
+		"No usable LLM provider/model for this repo, or the provider kept failing. Check self-healer.config.json, API keys, and provider status.",
+	no_test_command:
+		"No test command could be detected, so a fix cannot be verified (and is never pushed unverified). Set repos.<repo>.testCommand in self-healer.config.json.",
+	guardrail_violation:
+		"The proposed fix broke a guardrail (deleted/skipped tests, touched workflows, or added secrets) and was refused. Review the agent's rationale and fix manually.",
 };
 
 /** Suggested next step for an escalation reason (contracts/fix-attempt.md mapping). */

@@ -37,6 +37,7 @@ export interface AppConfig {
 	llm: {
 		geminiApiKey: string | undefined;
 		openrouterApiKey: string | undefined;
+		groqApiKey: string | undefined;
 		ollamaBaseUrl: string;
 	};
 }
@@ -71,6 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 		llm: {
 			geminiApiKey: env.GEMINI_API_KEY || undefined,
 			openrouterApiKey: env.OPENROUTER_API_KEY || undefined,
+			groqApiKey: env.GROQ_API_KEY || undefined,
 			ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
 		},
 	};

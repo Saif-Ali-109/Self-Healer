@@ -129,9 +129,9 @@ export function migrateDown(db: DatabaseSync = getDb(), all = false): void {
 
 // ── CLI ───────────────────────────────────────────────────────────────
 
-const isDirectRun =
-	import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` ||
-	process.argv[1]?.endsWith("src/db/migrate.ts");
+// Only when THIS file is the entry script. (A bundled CLI/daemon has
+// import.meta.url === argv[1], which must not trigger the migrate CLI.)
+const isDirectRun = process.argv[1]?.replace(/\\/g, "/").endsWith("src/db/migrate.ts") ?? false;
 
 if (isDirectRun) {
 	const command = process.argv[2];

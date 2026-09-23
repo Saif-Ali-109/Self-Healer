@@ -3,38 +3,35 @@
 // Owns: orchestrator.ts (T024 + T027 + T033 + T037). Single writer — no other
 // file modifies this module, satisfying the constitution's no-same-file rule.
 
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { attemptAgentFix } from "../agent/fixer.ts";
 import type { Pool } from "../db/pool.ts";
-import {
-	cleanupWorktree,
-	setupWorktree,
-	type WorktreeHandle,
-} from "./worktree.ts";
 import { getPool } from "../db/pool.ts";
-import { chainRunTransition } from "../sor/ciEvents.ts";
+import { createLlmClient, credentialsFromEnv, resolveLlm } from "../llm/resolve.ts";
+import { addNote, penalizeRunNotes } from "../memory/notes.ts";
+import {
+	limitsFor,
+	loadSettings,
+	parseSettings,
+	repoSettings,
+	type Settings,
+} from "../settings.ts";
+import { chainAgentEvent, chainRunTransition } from "../sor/ciEvents.ts";
 import type {
 	CiEvent,
 	ClassificationResult,
 	EscalationReason,
 } from "../types.ts";
-import {
-	FIX_CONFIDENCE_THRESHOLD,
-	isCriticalBranch,
-	MULTI_FILE_THRESHOLD,
-} from "../types.ts";
+import { isCriticalBranch } from "../types.ts";
 import { PipelineBudget } from "../utils/budget.ts";
 import { classify, fetchJobLogs } from "./classifier/index.ts";
 import { writeEscalation } from "./escalation/writer.ts";
-import { type AllowlistEntry, matchPattern } from "./fixscope/allowlist.ts";
-import { openFixPr } from "./fixscope/fixpr.ts";
-import { applyImportFix } from "./fixscope/importfixer.ts";
-import { applyLintFix } from "./fixscope/lintfixer.ts";
-import { fixBranchName, recordFixAttempt } from "./fixscope/record.ts";
+import { fixBranchName } from "./fixscope/record.ts";
 import { CiQueue } from "./queue.ts";
 import { retryFlaky } from "./retry/runner.ts";
 
 const RUNS_ROOT = join(process.cwd(), ".runs");
+const CACHE_DIR = join(process.cwd(), "data", "cache");
 
 export interface PipelineResult {
 	runId: string;
@@ -54,7 +51,21 @@ export async function processCiFailure(
 ): Promise<PipelineResult> {
 	const pool = getPool();
 	const queue = new CiQueue(pool);
-	const budget = new PipelineBudget();
+	let settings: Settings;
+	let settingsError: string | undefined;
+	try {
+		settings = loadSettings();
+	} catch (err) {
+		settingsError = String(err instanceof Error ? err.message : err);
+		console.error(`[orchestrator] ${settingsError} — falling back to defaults`);
+		settings = parseSettings({});
+	}
+	const limits = limitsFor(settings, event.repo);
+	const budget = new PipelineBudget(
+		new Date(),
+		limits.maxLlmCalls,
+		limits.pipelineBudgetMs,
+	);
 
 	// Intake (webhook path): enqueue + dedupe. The worker path passes an
 	// existing runId (row already in ci_runs) and must NOT re-enqueue.
@@ -77,6 +88,17 @@ export async function processCiFailure(
 	}
 
 	try {
+		// ── Lineage: is this CI failing again on a branch we pushed a fix to? ──
+		const lineage = await resolveLineage(pool, event);
+		if (lineage.cycle > 0 && lineage.parentRunId) {
+			await pool.query(
+				"UPDATE ci_runs SET parent_run_id = $1, fix_cycle = $2 WHERE run_id = $3",
+				[lineage.parentRunId, lineage.cycle, runId],
+			);
+			// The previous fix (and the notes it was built on) did not hold.
+			await penalizeRunNotes(pool, lineage.parentRunId);
+		}
+
 		// ── Stage 1: Classify ────────────────────────────────────────
 		await queue.updateStatus(runId, "classifying");
 		await chainRunTransition(pool, runId, "pending", "classifying");
@@ -127,7 +149,11 @@ export async function processCiFailure(
 				);
 
 			case "real_bug":
-				return routeRealBug(pool, runId, event, classification, budget);
+				return routeRealBug(pool, runId, event, classification, budget, {
+					lineage,
+					settings,
+					settingsError,
+				});
 
 			default:
 				return escalate(
@@ -182,6 +208,20 @@ async function routeFlaky(
 	});
 
 	if (retryResult.resolved) {
+		// Learn: this job failed and then passed on rerun → remember it as flaky.
+		try {
+			await addNote(
+				pool,
+				{ repo: event.repo, runId, source: "system", confidence: 0.55 },
+				{
+					kind: "flaky_hint",
+					text: `Job "${event.job_name ?? "unknown"}" failed then passed on rerun (${retryResult.rerunsUsed}); treat similar failures as likely flaky.`,
+					tags: [(event.job_name ?? "").toLowerCase()],
+				},
+			);
+		} catch (err) {
+			console.warn("[orchestrator] could not store flaky note:", err);
+		}
 		return { runId, path: "resolved" };
 	}
 
@@ -196,7 +236,39 @@ async function routeFlaky(
 	);
 }
 
-// ── Route: real_bug → guardrail → fix or escalate ────────────────────
+// ── Lineage (re-fix loop) ────────────────────────────────────────────
+
+export interface Lineage {
+	/** 0 = first failure; n = n-th re-fix after a pushed fix did not make CI pass. */
+	cycle: number;
+	parentRunId?: string;
+	/** Existing ci-fix branch to keep pushing to, when cycle > 0. */
+	branch: string | null;
+}
+
+/**
+ * A failure on `ci-fix/*` is the CI verdict on a fix we pushed. Find the run
+ * that last pushed to that branch; this failure is its next re-fix cycle.
+ */
+export async function resolveLineage(
+	pool: Pool,
+	event: CiEvent,
+): Promise<Lineage> {
+	if (!event.branch.startsWith("ci-fix/")) return { cycle: 0, branch: null };
+	const prev = await pool.query<{ run_id: string; fix_cycle: number }>(
+		"SELECT run_id, fix_cycle FROM ci_runs WHERE repo = $1 AND fix_branch = $2 ORDER BY created_at DESC LIMIT 1",
+		[event.repo, event.branch],
+	);
+	const p = prev.rows[0];
+	if (!p) return { cycle: 0, branch: null };
+	return {
+		cycle: Number(p.fix_cycle) + 1,
+		parentRunId: p.run_id,
+		branch: event.branch,
+	};
+}
+
+// ── Route: real_bug → AI agent → verified push, or escalate ──────────
 
 async function routeRealBug(
 	pool: Pool,
@@ -204,20 +276,25 @@ async function routeRealBug(
 	event: CiEvent,
 	classification: ClassificationResult,
 	budget: PipelineBudget,
+	ctx: { lineage: Lineage; settings: Settings; settingsError: string | undefined },
 ): Promise<PipelineResult> {
-	// Guardrail: confidence must be ≥ threshold
-	if (classification.confidence < FIX_CONFIDENCE_THRESHOLD) {
+	const { lineage, settings } = ctx;
+	const limits = limitsFor(settings, event.repo);
+	const repoCfg = repoSettings(settings, event.repo);
+
+	// Guardrail: escalation cap for the re-fix loop.
+	if (lineage.cycle > limits.maxFixCycles) {
 		return escalate(
 			pool,
 			runId,
 			event,
-			"low_confidence",
-			`Confidence ${classification.confidence} is below the ${FIX_CONFIDENCE_THRESHOLD} threshold.`,
+			"retry_cap_exceeded",
+			`CI is still failing on '${event.branch}' after ${limits.maxFixCycles} re-fix cycle(s). Stopping instead of looping.`,
 			budget,
 		);
 	}
 
-	// Guardrail: critical branch → never touch
+	// Guardrail: protected branches are never touched.
 	if (isCriticalBranch(event.branch)) {
 		return escalate(
 			pool,
@@ -229,235 +306,75 @@ async function routeRealBug(
 		);
 	}
 
-	// Guardrail: multi-file (≥ 5 files) → too risky
-	// Note: we don't have file count at this stage without checking the diff.
-	// For MVP, we skip this check here and handle it in the fix verification stage
-	// where we have the worktree diff available.
-
-	// Budget check before fix
 	if (budget.isExpired()) {
-		return escalate(
-			pool,
-			runId,
-			event,
-			"budget_exhausted",
-			"Budget expired before fix attempt.",
-			budget,
-		);
-	}
-	if (!budget.tickLlm()) {
-		return escalate(
-			pool,
-			runId,
-			event,
-			"budget_exhausted",
-			"LLM call budget exhausted.",
-			budget,
-		);
+		return escalate(pool, runId, event, "budget_exhausted", "Budget expired before fix attempt.", budget);
 	}
 
-	// Fetch logs for pattern matching (shared helper — cleaned of BOM + timestamps)
+	// Brain: per-repo provider/model override > global default > env.
+	const creds = credentialsFromEnv();
+	let llm: ReturnType<typeof createLlmClient>;
+	let choice: ReturnType<typeof resolveLlm>;
+	try {
+		if (ctx.settingsError) throw new Error(ctx.settingsError);
+		choice = resolveLlm(settings, event.repo, creds);
+		llm = createLlmClient(choice, creds);
+	} catch (err) {
+		return escalate(
+			pool,
+			runId,
+			event,
+			"llm_unavailable",
+			String(err instanceof Error ? err.message : err),
+			budget,
+		);
+	}
+	await chainAgentEvent(pool, runId, "ci_agent_start", {
+		phase: "provider_selected",
+		provider: choice.provider,
+		model: choice.model,
+		origin: choice.origin,
+		cycle: lineage.cycle,
+	});
+
 	const logText = await fetchJobLogs(event.repo, event.log_url);
 
-	// Guardrail: allowlist match required
-	const pattern = matchPattern(logText);
-	if (!pattern) {
-		return escalate(
-			pool,
-			runId,
-			event,
-			"no_pattern_match",
-			`Failure does not match any allowlisted fix pattern.`,
-			budget,
-		);
-	}
+	const queue = new CiQueue(pool);
+	await queue.updateStatus(runId, "fixing");
+	await chainRunTransition(pool, runId, "classifying", "fixing", {
+		cycle: lineage.cycle,
+	});
 
-	// ── Attempt the fix ────────────────────────────────────────────
-	const fixResult = await attemptFix(
+	const result = await attemptAgentFix({
 		pool,
 		runId,
 		event,
-		pattern,
-		logText, // already fetched above — pass it down, don't refetch
+		classification,
+		logText,
 		budget,
-	);
-	return fixResult;
-}
+		llm,
+		temperature: choice.temperature,
+		limits,
+		repoCfg,
+		branch: lineage.branch ?? fixBranchName(runId),
+		cycle: lineage.cycle,
+		parentRunId: lineage.parentRunId,
+		runsRoot: RUNS_ROOT,
+		cacheDir: CACHE_DIR,
+	});
 
-// ── Fix attempt ──────────────────────────────────────────────────────
-
-async function attemptFix(
-	pool: Pool,
-	runId: string,
-	event: CiEvent,
-	pattern: AllowlistEntry,
-	logText: string,
-	budget: PipelineBudget,
-): Promise<PipelineResult> {
-	const queue = new CiQueue(pool);
-	await queue.updateStatus(runId, "fixing");
-	await chainRunTransition(pool, runId, "classifying", "fixing");
-
-	// Set up worktree
-	const runDir = join(RUNS_ROOT, runId);
-	await mkdir(runDir, { recursive: true });
-	const branch = fixBranchName(runId);
-
-	let worktree: WorktreeHandle | undefined;
-	try {
-		// We need the repo URL — derive from the repo slug
-		const repoUrl = `https://github.com/${event.repo}.git`;
-		// Branch the worktree off the FAILING commit so the fixer sees the
-		// exact tree that failed (PR branches are not the default branch).
-		worktree = await setupWorktree(
-			repoUrl,
-			runDir,
-			branch,
-			undefined,
-			event.commit,
-		);
-	} catch (err) {
-		await queue.updateStatus(runId, "escalated");
-		return escalate(
-			pool,
-			runId,
-			event,
-			"checkout_failed",
-			`Could not set up worktree: ${String(err)}`,
-			budget,
-		);
-	}
-	if (!worktree) {
-		return escalate(
-			pool,
-			runId,
-			event,
-			"checkout_failed",
-			"Worktree setup returned no handle.",
-			budget,
-		);
-	}
-
-	try {
-		// The pattern's verifyCommand is the repro command itself, executed in
-		// the worktree after the fix (exit 0 verifies). Fixer selection is keyed
-		// off pattern.id — each active pattern owns its fixer.
-		const verifyCommand = pattern.verifyCommand;
-		let fixResult: {
-			success: boolean;
-			diff: string;
-			filesChanged: number;
-			verificationOutput: string;
-			error?: string;
-			reason?: string;
-		};
-		if (pattern.id === "lint/format") {
-			fixResult = await applyLintFix(
-				worktree,
-				branch,
-				undefined,
-				verifyCommand,
-			);
-		} else if (pattern.id === "import/type") {
-			fixResult = await applyImportFix(
-				worktree,
-				branch,
-				verifyCommand,
-				logText,
-			);
-		} else {
-			// Unreachable via matchPattern (stubs never detect); defensive.
-			fixResult = {
-				success: false,
-				diff: "",
-				filesChanged: 0,
-				verificationOutput: "",
-				error: `no fixer registered for pattern ${pattern.id}`,
-			};
-		}
-
-		// Guardrail: multi-file check on the diff
-		const changedFilesList = fixResult.diff.split("\n").filter((l) => l.trim());
-		if (changedFilesList.length >= MULTI_FILE_THRESHOLD) {
-			return escalate(
-				pool,
-				runId,
-				event,
-				"multi_file",
-				`Fix touches ${changedFilesList.length} files (≥ ${MULTI_FILE_THRESHOLD}). Too risky.`,
-				budget,
-			);
-		}
-
-		// Record the fix attempt (single attempt — DB unique enforces the cap)
-		await recordFixAttempt(pool, {
-			runId,
-			patternMatched: pattern.id,
-			diff: fixResult.diff,
-			branch,
-			verificationResult: fixResult.success ? "passed" : "failed",
-			testSummary:
-				fixResult.verificationOutput ||
-				`${verifyCommand}: ${fixResult.success ? "passed" : "failed"}`,
+	if (result.kind === "delivered") {
+		await queue.updateStatus(runId, "resolved");
+		await chainRunTransition(pool, runId, "fixing", "resolved", {
+			branch: result.branch,
+			commit: result.commitSha,
+			...(result.fixPrUrl ? { pr_url: result.fixPrUrl } : {}),
 		});
-
-		if (fixResult.success) {
-			// Human-approved delivery (constitution v1.2.0): surface the verified
-			// fix as a reviewable PR. The agent never merges.
-			const fixPrUrl = await openFixPr(pool, {
-				runId,
-				repo: event.repo,
-				externalRunId: event.external_run_id,
-				headBranch: branch,
-				baseBranch: event.branch,
-				pattern: pattern.id,
-				diffSummary: `${fixResult.filesChanged} files changed`,
-				verification: `${verifyCommand}: passed`,
-			});
-
-			// Post fix comment
-			const { postFixComment } = await import("./comments.ts");
-			const newCommentUrl = await postFixComment(
-				event.repo,
-				event.external_run_id,
-				{
-					rootCause:
-						pattern.rootCause ??
-						`Failure detected in the failing job (pattern: ${pattern.id}).`,
-					pattern: pattern.id,
-					branch,
-					diffSummary: `${fixResult.filesChanged} files changed`,
-					verification: `${verifyCommand}: passed`,
-					fixPrUrl: fixPrUrl ?? undefined,
-				},
-			);
-			if (newCommentUrl || fixPrUrl) {
-				await pool.query(
-					"UPDATE fix_attempts SET comment_url = COALESCE($1, comment_url), fix_pr_url = COALESCE($2, fix_pr_url) WHERE run_id = $3",
-					[newCommentUrl, fixPrUrl, runId],
-				);
-			}
-			await queue.updateStatus(runId, "resolved");
-			await chainRunTransition(pool, runId, "fixing", "resolved");
-			console.log(`[orchestrator] run ${runId} fix delivered on ${branch}`);
-			return { runId, path: "fix_delivered" };
-		}
-
-		// Verification failed or a guardrail bailed → escalate, never retry
-		return escalate(
-			pool,
-			runId,
-			event,
-			"fix_failed",
-			`Fix failed: ${
-				fixResult.reason ?? fixResult.error ?? "verification failed"
-			}. Diff: ${fixResult.diff.slice(0, 200)}`,
-			budget,
+		console.log(
+			`[orchestrator] run ${runId} fix pushed to ${result.branch} (cycle ${lineage.cycle}); waiting for CI on the branch`,
 		);
-	} finally {
-		// Clean up worktree
-		await cleanupWorktree(worktree).catch(() => {});
+		return { runId, path: "fix_delivered" };
 	}
+	return escalate(pool, runId, event, result.reason, result.summary, budget);
 }
 
 // ── Escalation helper ────────────────────────────────────────────────

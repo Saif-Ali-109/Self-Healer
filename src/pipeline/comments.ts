@@ -107,6 +107,13 @@ export interface FixCommentOptions {
 	verification: string;
 	/** Fix-only PR URL, when one was opened for review (constitution v1.2.0). */
 	fixPrUrl?: string;
+	/** AI-agent extras (all optional so legacy callers/tests are unaffected). */
+	summary?: string;
+	reasoning?: string;
+	cycle?: number;
+	maxCycles?: number;
+	warnings?: string[];
+	model?: string;
 }
 
 /**
@@ -124,11 +131,22 @@ export function buildFixCommentBody(opts: FixCommentOptions): string {
 		`**Branch**: \`${opts.branch}\``,
 		`**Diff summary**: ${opts.diffSummary}`,
 		`**Verification**: ${opts.verification}`,
+		...(opts.summary ? ["", `**What changed**: ${opts.summary}`] : []),
+		...(opts.reasoning ? ["", `**Agent reasoning**: ${opts.reasoning.slice(0, 1200)}`] : []),
+		...(opts.cycle !== undefined && opts.cycle > 0
+			? ["", `**Re-fix cycle**: ${opts.cycle} of ${opts.maxCycles ?? "?"} (an earlier fix on this branch did not make CI pass)`]
+			: []),
+		...(opts.model ? ["", `**Model**: \`${opts.model}\``] : []),
+		...(opts.warnings && opts.warnings.length > 0
+			? ["", ...opts.warnings.map((w) => `> ⚠️ ${w}`)]
+			: []),
 		...(opts.fixPrUrl
 			? ["", `**Pull request**: ${opts.fixPrUrl} — review & merge when ready.`]
 			: []),
 		"",
-		"> Review and merge at your discretion. The agent never merges.",
+		opts.fixPrUrl
+			? "> Opened the fix PR above for human review — nothing was merged. The agent never merges."
+			: "> Pushed to the branch above only — no PR was opened and nothing was merged. Review and merge at your discretion. The agent never merges.",
 	].join("\n");
 }
 

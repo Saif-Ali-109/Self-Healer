@@ -24,7 +24,12 @@ export type EscalationReason =
 	| "no_pattern_match"
 	| "infra"
 	| "flaky_retries_exhausted"
-	| "checkout_failed";
+	| "checkout_failed"
+	| "retry_cap_exceeded" // re-fix loop hit its escalation cap
+	| "agent_gave_up" // the agent decided it cannot fix this safely
+	| "llm_unavailable" // no usable provider/model, or the provider failed
+	| "no_test_command" // cannot verify, so cannot push
+	| "guardrail_violation"; // fix tried to cheat / touch forbidden files
 
 export type FixVerificationResult = "passed" | "failed";
 
@@ -88,10 +93,12 @@ export interface EscalationRecord {
 
 export const FIX_CONFIDENCE_THRESHOLD = 0.7;
 export const MAX_RERUNS = 3;
+/** Legacy classifier-era cap; the agent's budget now comes from settings. */
 export const MAX_LLM_CALLS = 3;
 export const PIPELINE_BUDGET_MS = 10 * 60_000;
 export const MULTI_FILE_THRESHOLD = 5;
 export const CLASSIFIER_VERSION = "signals-v1";
+export const AGENT_VERSION = "agent-v1";
 
 const CRITICAL_BRANCH_PATTERNS: ReadonlyArray<RegExp> = [
 	/^main$/,

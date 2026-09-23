@@ -1,0 +1,34 @@
+# /etc/systemd/system/self-healer.service
+# Install: see docs/DEPLOYMENT.md. Runs the daemon 24/7 as an unprivileged user.
+[Unit]
+Description=Self-Healer CI agent (AI repair agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=selfhealer
+Group=selfhealer
+WorkingDirectory=/opt/self-healer
+# Secrets live in a root-owned 0600 file (systemd reads it; the service user cannot).
+EnvironmentFile=/etc/self-healer/env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/self-healer/dist/daemon.mjs
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Hardening (the agent runs repo test code — contain it)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/self-healer/data /opt/self-healer/.runs
+
+[Install]
+WantedBy=multi-user.target
