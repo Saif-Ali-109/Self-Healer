@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-13
 
-**Status**: Draft (updated for standalone architecture)
+**Status**: Implemented / as-built v2 — standalone daemon + AI repair agent + per-repo notes memory (updated 2026-09-25)
 
 **Input**: User description: "Build the Self-Healer CI Agent — a system that watches for CI failures, classifies them (flaky / real bug / infra), retries flaky runs, auto-fixes allowlisted bugs on a branch with exactly one attempt, escalates everything else with a root-cause comment on the failing CI run, and logs every decision in an auditable trail."
 
@@ -42,25 +42,27 @@ When a failure is classified as flaky, the agent reruns the failing job automati
 
 ---
 
-### User Story 3 - Small safe bugs get one auto-fix, proposed for human review (Priority: P1)
+### User Story 3 - Real bugs get an AI-agent auto-fix, proposed for human review (Priority: P1)
 
-When a failure is classified as a real bug with confidence at or above the required threshold, and the failure matches one of the fixable-pattern allowlist entries, the agent applies exactly one fix, verifies it against the affected tests in a worktree, and pushes the change to a `ci-fix/<run-id>` branch as a **fix-only pull request for human approval**. The agent comments on the CI run with the root cause, branch name, diff summary, and test results. It never merges.
+When a failure is classified as a real bug with confidence at or above the required threshold (≥ 0.7), the **AI repair agent** (`ai-agent` pattern) diagnoses and fixes it in an isolated worktree at the failing commit, verifies the **full test suite** passes, and pushes the change to a `ci-fix/<run-id>` branch as a **fix-only pull request for human approval**. The agent comments on the CI run with the root cause, branch name, diff summary, and test results. It never merges. Deterministic patterns (`lint/format`, `import/type`) fire first when their detection matches; everything else still routes through the LLM agent.
 
 **Fixable patterns (allowlist)**:
 
 | Pattern | Detection | Verification |
 |---------|-----------|--------------|
+| `ai-agent` | any `real_bug` (rule-first classification) | full suite green (`npm test` → gate on finish) |
 | `lint/format` | biome / eslint / prettier diagnostics | `npx @biomejs/biome check .` |
 | `import/type` | `ReferenceError: X is not defined` | `node src/main.mjs` (repo convention) |
-| `snapshot` | — (stub, post-MVP) | — |
-| `timeout` | — (stub, post-MVP) | — |
+| `snapshot` | — (stub) | — |
+| `timeout` | — (stub) | — |
 
 **Acceptance Scenarios**:
 
-1. Given a failure classified as `real_bug` with confidence ≥ 0.7, when the fix scope guardrail evaluates it, then an auto-fix is attempted only if the failure matches an allowlisted pattern.
-2. Given an auto-fix attempt, when the fix loop runs, then exactly one fix attempt is made per failure — never a second attempt if verification fails.
-3. Given a fix that verifies successfully, when delivery happens, then the change is pushed to a `ci-fix/<run-id>` branch as a fix-only PR, and a comment is posted on the CI run with root cause, branch, diff summary, and test results.
+1. Given a failure classified as `real_bug` with confidence ≥ 0.7, when the fix scope guardrail evaluates it, then the failure is handed to the AI repair agent (deterministic patterns fire first when matched).
+2. Given an agent run, when `finish` is called, then the full test suite runs as the gate; gate failures are fed back and the agent keeps working (≤ 3 finish rejections). The database records exactly ONE `fix_attempts` row per CI run (unique `uq_fix_attempts_run`).
+3. Given a fix that the gate verifies successfully, when delivery happens, then the change is pushed to a `ci-fix/<run-id>` branch and a fix-only PR is opened; a comment is posted on the CI run with root cause, branch, diff summary, and test results. If the PR can't open, delivery falls back to branch + CI comment.
 4. Given any auto-fix outcome, when the pipeline finishes, then no code is merged automatically — a human reviews and merges the PR.
+5. Given CI still fails after a fix was pushed, when a new run arrives on that branch, then a **re-fix cycle** runs against the previous attempt (parent_run_id, `fix_cycle`, ≤ `maxFixCycles` = 3), and the notes the earlier fix was built on are penalized.
 
 ---
 
@@ -99,7 +101,20 @@ A developer installs the standalone package, configures one `.env`, opts a repos
 
 1. Given a developer runs `self-healer init`, when they configure `.env`, then the SQLite database and `.env` template are created.
 2. Given a developer runs `self-healer enable --repo owner/repo`, when the command completes, then `self-healer-notify.yml` is written to the repo and the repo is registered as watched.
-3. Given the daemon is running and a watched repo has a failing CI job, when the job fails, then the agent processes it automatically (no CI config changes required in the repo).
+3. Given the daemon is running and a watched repo has a failing CI job, when the job fails, then the agent processes it automatically (the only repo change is the opt-in `self-healer-notify.yml` reporter workflow).
+
+---
+
+### User Story 7 - The agent remembers what it learned about a repo (Priority: P1, shipped)
+
+The agent keeps **persistent per-repo learning notes** (`repo_notes` in SQLite — "notes for himself"). After every `finish`/`give_up` it writes 0–3 durable takeaways (root causes, flaky-tests, how the suite must run, approaches that failed); before every fix run it retrieves the notes most relevant to the failing log/job-name and injects them into the prompt as hints. Humans can also teach it (`self-healer notes add` — highest confidence). Notes reinforce on agreement, decay when a fix built on them fails, and retire when untrusted.
+
+**Acceptance Scenarios**:
+
+1. Given an agent run that finishes, when the pipeline completes, then the agent's 0–3 notes are stored for the repo (`ci_notes_written`), deduplicated against near-identical notes (jaccard ≥ 0.6 merges and reinforces).
+2. Given a later run on the same repo, when the task prompt is built, then the top relevant active notes are injected as hints (`ci_notes_read`), length-capped, secret-redacted, and framed as DATA ("verify before trusting").
+3. Given a fix built on notes that then fails in a later cycle, when lineage detects it, then the source notes' confidence is decayed (×0.7) and any below 0.2 are retired.
+4. Given an operator, when they run `self-healer notes list --repo owner/repo`, then active notes with kind, confidence, and body are shown; `notes add` and `notes retire` work likewise.
 
 ---
 
@@ -115,19 +130,21 @@ A developer installs the standalone package, configures one `.env`, opts a repos
 - **FR-006**: System MUST rerun a `flaky` failure up to three times and mark it resolved if a rerun passes.
 - **FR-007**: System MUST escalate a `flaky` failure if it still fails after three reruns.
 - **FR-008**: System MUST escalate `infra` failures immediately with the infra evidence.
-- **FR-009**: System MUST only auto-fix real-bug failures that match the fixable-pattern allowlist: `lint/format`, `import/type`, and post-MVP stubs (`snapshot`, `timeout`).
-- **FR-010**: System MUST make at most ONE auto-fix attempt per failure; verification failure leads to escalation, never a second attempt.
-- **FR-011**: System MUST verify an auto-fix by running the pattern's `verifyCommand` in the worktree before proposing it.
-- **FR-012**: System MUST deliver fixes by pushing to a `ci-fix/<run-id>` branch and surfacing a **fix-only PR** for human review; a comment is posted on the CI run with root cause, branch, diff summary, and test results.
+- **FR-009**: System MUST route `real_bug` failures (confidence ≥ 0.7) to the AI repair agent (`ai-agent`); deterministic patterns `lint/format` and `import/type` fire first when their detection matches. `snapshot` / `timeout` remain stubs.
+- **FR-010**: System MUST record at most ONE `fix_attempts` row per CI run (unique `uq_fix_attempts_run`); re-fix cycles across subsequent CI runs on the same branch are bounded by `maxFixCycles` (default 3).
+- **FR-011**: System MUST verify a fix before proposing it — the full test suite as the gate for `ai-agent`, the pattern's `verifyCommand` in the worktree for deterministic patterns.
+- **FR-012**: System MUST deliver fixes by pushing to a `ci-fix/<run-id>` branch and surfacing a **fix-only PR** for human review (titled `🤖 Self-Healer: auto-fix for CI run #<run-id>`); if the PR cannot open (network, cross-fork, head == base), it MUST fall back to branch + CI comment. A comment is posted on the CI run with root cause, branch, diff summary, and test results.
 - **FR-013**: System MUST NOT merge changes automatically — a human always reviews and merges the fix PR.
 - **FR-014**: System MUST escalate when any of the following holds: confidence < 0.7, a fix attempt already failed, failure involves 5+ files, failure is on `main`/`release/*`/`v*`, budgets are exhausted, or no allowlist pattern matches.
 - **FR-015**: System MUST process one failure at a time via a single worker with a FIFO queue; no parallel failure processing.
-- **FR-016**: System MUST complete the full pipeline for a failure within a 10-minute budget; on timeout, stop and escalate with partial evidence.
-- **FR-017**: System MUST make at most THREE LLM model calls per failure pipeline; on exhaustion, escalate with available evidence. LLM enrichment is optional; the classifier is rule-first.
+- **FR-016**: System MUST complete the full pipeline for a failure within the configured pipeline budget (`pipelineBudgetMs`, default 20 minutes; the lab config widens it to 40 minutes for free-tier request pacing); on timeout, stop and escalate with partial evidence.
+- **FR-017**: System MUST bound LLM usage per run via `maxLlmCalls` (default 40) and `maxToolCalls` (default 80); on exhaustion, escalate with available evidence. LLM enrichment is optional and the classifier is rule-first.
 - **FR-018**: System MUST append every decision to a tamper-evident hash-chain audit log stored in SQLite (`npm run sor:verify` proves tamper-freeness).
 - **FR-019**: System MUST source all secrets from environment variables only, never from code, config files, logs, comments, or audit records.
 - **FR-020**: System MUST ignore webhook events from its own `ci-fix/*` branches (prevent loops).
 - **FR-021**: System MUST only process repositories that contain `self-healer-notify.yml` (opt-in gating).
+- **FR-022**: System MUST persist per-repo learning notes (`repo_notes`); notes are written by the agent (`finish`/`give_up`), the pipeline, and humans; retrieved before each fix run (keyword-scored), injected as length-capped, secret-redacted hints, and reinforced / decayed / retired by outcome.
+- **FR-023**: System MUST support exactly four LLM providers for the repair agent — `gemini`, `openrouter`, `ollama`, `groq` — selectable globally and/or per repo in `self-healer.config.json`; the classifier never requires an LLM.
 
 ### Key Entities
 
@@ -136,6 +153,7 @@ A developer installs the standalone package, configures one `.env`, opts a repos
 - **Fix Attempt**: A single auto-fix action; carries the matched pattern, diff, branch, verification result, PR URL. At most one per failure.
 - **Escalation**: A human-facing handoff; carries the reason, root-cause summary, and suggested next step.
 - **Audit Event**: An append-only SOR record with a hash chain binding it to the previous record.
+- **Repo Note**: A durable, per-repo learning note (kind, body, tags, files, confidence, source) that survives across runs and is injected into later runs as a hint.
 
 ---
 
@@ -151,7 +169,7 @@ self-healer enable --repo org/repo   # writes self-healer-notify.yml
 self-healer start       # daemon on CI_WEBHOOK_PORT (default :3457)
 ```
 
-**Out of scope (future):** GitHub App form, multi-worker scaling, LLM enrichment, dashboard UI, standalone demo-repo re-run (re-run after packaging completes).
+**Out of scope (future):** GitHub App form, multi-worker scaling, LLM enrichment beyond rule-first, dashboard UI, standalone demo-repo re-run (re-run after packaging completes).
 
 ---
 
@@ -172,17 +190,34 @@ self-healer start       # daemon on CI_WEBHOOK_PORT (default :3457)
 - The agent uses `node:sqlite` (built into Node 22+) and direct `git worktree` shell calls; no external database server or Fleet clone is required.
 - The agent has read access to repository contents and CI run logs/artifacts, and push access to create the `ci-fix`-style branch. Human review and merge happen outside the agent.
 - A human reviewer always approves any fix before it reaches the critical branch; the agent never pushes to protected branches.
-- The 10-minute pipeline and 3-model-call budgets are hard limits set at launch.
+- The 20-minute pipeline budget (default; config-tunable), `maxLlmCalls` (default 40) and `maxToolCalls` (default 80) are the hard limits; the lab config widens the time budget to 40 minutes purely for free-tier request pacing.
 - Fix patterns are added one at a time, each with its own validation step and tests.
-- The daemon polls GitHub Actions for failed runs on watched repos (in addition to receiving webhooks), so the developer's CI workflow needs no changes.
+- The daemon receives GitHub Actions webhooks (and polls failed runs on watched repos where configured); the only repository change required is the opt-in `self-healer-notify.yml` reporter workflow.
 - `self-healer-notify.yml` is the opt-in mechanism; only repos carrying this file are processed.
 
 ## Success Criteria
 
-- **SC-001**: `flaky` failures classified with confidence ≥ 0.7 resolve automatically within 10 minutes of the failure notification, with zero manual action.
-- **SC-002**: No more than one auto-fix attempt is ever made per failure (100% compliance with the hard cap).
+- **SC-001**: `flaky` failures classified with confidence ≥ 0.7 resolve automatically within the pipeline budget (default 20 min) of the failure notification, with zero manual action.
+- **SC-002**: No more than one auto-fix attempt is ever recorded per CI run (unique `uq_fix_attempts_run`, 100% compliance with the hard cap); any re-fix happens as a fresh run in a bounded cycle (≤ `maxFixCycles`).
 - **SC-003**: 100% of failures that cannot be auto-fixed (low confidence, 5+ files, critical branch, no pattern match, budgets exhausted) produce an escalation comment with a root-cause summary and a suggested next step.
 - **SC-004**: 100% of processed failures leave a complete audit-trail record whose tamper-evidence detects any modification to earlier records (`sor:verify` passes).
-- **SC-005**: 100% of pipelines finish within 10 minutes of webhook receipt; anything longer ends in an escalation with partial evidence.
+- **SC-005**: 100% of pipelines finish within the configured pipeline budget of webhook receipt; anything longer ends in an escalation with partial evidence.
 - **SC-006**: Zero secret material appears in any comment, log, or audit record (0 incident tolerance).
 - **SC-007**: The standalone package installs and runs with no external database server or Fleet clone (`npm i -g`, `self-healer init`, `self-healer start`).
+- **SC-008**: Per-repo notes persist across runs and measurably influence later runs (retrieved + injected, `ci_notes_read` recorded; reinforcement/decay/retire observable via `self-healer notes list`).
+
+---
+
+## Live Delivery Evidence
+
+Delivered end-to-end against the `Saif-Ali-109/demo-repo` contract repo:
+
+| Deliverable | Evidence |
+|---|---|
+| `lint/format` fix | formatting error in `src/widget.js` → auto-fix → **PR #33** on `ci-fix/<run-id>` — merged by human |
+| `import/type` fix | `ReferenceError: renderWidget is not defined` → added import → verified `node src/main.mjs` (exit 0) → **PR #34** — merged by human |
+| flaky escalation (by design) | hardcoded intermittent failure → 3 reruns exhausted → escalate `flaky_retries_exhausted` |
+| escalation (by design) | hardcoded unknown error → no pattern match → escalate `no_pattern_match` |
+| **First AI-agent delivery** | run `97df1109` → agent fixed `src/calc.js` `multiply` (`a + b` → `a * b`), verified `npm test` in-worktree, pushed `ci-fix/97df1109`, opened **PR #40** (base `demo-real-bugs`), commented on the failing run |
+
+**Timeline of the AI-agent delivery** (webhook → PR): `14:08:56` UTC webhook → classified `real_bug` 0.9 at `14:09:02` → agent loop (7 steps, `groq/gpt-oss-120b`, 2,595 → 3,355 input tokens) `14:09:06–14:10:30` → verified `npm test: passed` → resolved + **PR #40 opened at 14:10:40 — 1 m 44 s total.** The agent's takeaway survives in `repo_notes`: `[root_cause] conf=0.6 src=agent: "multiply incorrectly returned sum instead of product, causing test failure."`
